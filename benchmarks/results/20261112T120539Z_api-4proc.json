@@ -1,0 +1,163 @@
+{
+  "measured_at": "2026-11-12T12:05:39.789699+00:00",
+  "seed": 1794484806,
+  "environment": {
+    "platform": "Linux-5.15.146.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+    "cpus": 8,
+    "mem_total_gib": 3.7,
+    "api": "4 uvicorn processes (WEB_CONCURRENCY=4) in Docker, sync handlers, DB pool 10+5 per process",
+    "client": "same host, httpx, robots partitioned by robot_id across worker threads"
+  },
+  "faults": {
+    "duplicate_rate": 0.02,
+    "reorder_rate": 0.02,
+    "invalid_battery_rate": 0.01,
+    "missing_field_rate": 0.01,
+    "reboot_rate": 0.002,
+    "max_delay_ticks": 3
+  },
+  "ingest": [
+    {
+      "workers": 1,
+      "robots": 500,
+      "telemetry_events": 10215,
+      "elapsed_s": 153.022,
+      "throughput_eps": 66.8,
+      "latency_ms": {
+        "p50": 13.34,
+        "p95": 23.1,
+        "p99": 26.84,
+        "max": 99.49
+      },
+      "retries": 0,
+      "outcomes": {
+        "APPLIED/-": 9695,
+        "DUPLICATE/-": 86,
+        "REJECTED/BATTERY_OUT_OF_RANGE": 103,
+        "REJECTED/MISSING_FIELD": 90,
+        "STALE/STALE_SEQUENCE": 241
+      },
+      "rejected_total": 434,
+      "matches_oracle": true
+    },
+    {
+      "workers": 4,
+      "robots": 500,
+      "telemetry_events": 10185,
+      "elapsed_s": 43.454,
+      "throughput_eps": 234.4,
+      "latency_ms": {
+        "p50": 12.06,
+        "p95": 21.21,
+        "p99": 35.07,
+        "max": 207.85
+      },
+      "retries": 0,
+      "outcomes": {
+        "APPLIED/-": 9671,
+        "DUPLICATE/-": 69,
+        "REJECTED/BATTERY_OUT_OF_RANGE": 106,
+        "REJECTED/MISSING_FIELD": 98,
+        "STALE/STALE_SEQUENCE": 241
+      },
+      "rejected_total": 445,
+      "matches_oracle": true
+    },
+    {
+      "workers": 8,
+      "robots": 500,
+      "telemetry_events": 10218,
+      "elapsed_s": 34.232,
+      "throughput_eps": 298.5,
+      "latency_ms": {
+        "p50": 17.93,
+        "p95": 38.92,
+        "p99": 53.91,
+        "max": 138.75
+      },
+      "retries": 0,
+      "outcomes": {
+        "APPLIED/-": 9690,
+        "DUPLICATE/-": 83,
+        "REJECTED/BATTERY_OUT_OF_RANGE": 100,
+        "REJECTED/MISSING_FIELD": 92,
+        "STALE/STALE_SEQUENCE": 253
+      },
+      "rejected_total": 445,
+      "matches_oracle": true
+    },
+    {
+      "workers": 16,
+      "robots": 500,
+      "telemetry_events": 10196,
+      "elapsed_s": 31.21,
+      "throughput_eps": 326.7,
+      "latency_ms": {
+        "p50": 36.86,
+        "p95": 72.2,
+        "p99": 94.75,
+        "max": 190.93
+      },
+      "retries": 0,
+      "outcomes": {
+        "APPLIED/-": 9680,
+        "DUPLICATE/-": 77,
+        "REJECTED/BATTERY_OUT_OF_RANGE": 94,
+        "REJECTED/MISSING_FIELD": 111,
+        "STALE/STALE_SEQUENCE": 234
+      },
+      "rejected_total": 439,
+      "matches_oracle": true
+    },
+    {
+      "workers": 32,
+      "robots": 500,
+      "telemetry_events": 10208,
+      "elapsed_s": 28.843,
+      "throughput_eps": 353.9,
+      "latency_ms": {
+        "p50": 69.79,
+        "p95": 159.12,
+        "p99": 215.87,
+        "max": 397.36
+      },
+      "retries": 0,
+      "outcomes": {
+        "APPLIED/-": 9725,
+        "DUPLICATE/-": 76,
+        "REJECTED/BATTERY_OUT_OF_RANGE": 94,
+        "REJECTED/MISSING_FIELD": 82,
+        "STALE/STALE_SEQUENCE": 231
+      },
+      "rejected_total": 407,
+      "matches_oracle": true
+    }
+  ],
+  "state_reads": {
+    "requests": 2000,
+    "latency_ms": {
+      "p50": 4.2,
+      "p95": 5.61,
+      "p99": 6.43
+    }
+  },
+  "database": {
+    "server_version": "17.11 (Debian 17.11-1.pgdg13+2)",
+    "synchronous_commit": "on",
+    "fsync": "on",
+    "rows": {
+      "robots": 5320,
+      "robot_latest_state": 5320,
+      "telemetry_rejections": 4750
+    },
+    "state_query": {
+      "execution_ms": 0.077,
+      "planning_ms": 0.746,
+      "plan": [
+        "Nested Loop",
+        "Index Scan on robot_latest_state using robot_latest_state_pkey",
+        "Index Scan on missions using uq_missions_one_active_per_robot"
+      ]
+    }
+  }
+}

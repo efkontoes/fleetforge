@@ -1,0 +1,69 @@
+# Milestone 1 stack.
+#   docker compose up -d                 -> PostgreSQL only (run the API/tests from the host)
+#   docker compose --profile app up -d   -> PostgreSQL + migrations + Fleet API
+# Later milestones add profiles (streaming, lakehouse, monitoring) so the whole
+# stack never has to run at once on a small machine.
+
+name: fleetforge
+
+x-db-env: &db-env
+  FLEETFORGE_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-fleetforge}:${POSTGRES_PASSWORD:-fleetforge}@postgres:5432/${POSTGRES_DB:-fleetforge}
+
+services:
+  postgres:
+    image: postgres:17@sha256:ff87138949ad9a46f32ff23bd6852b52ce024a13dffe9b4087be98292cdd3b4f
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-fleetforge}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fleetforge}
+      POSTGRES_DB: ${POSTGRES_DB:-fleetforge}
+    # wal_level=logical now, so Milestone 2 (Debezium) does not need a reconfiguration.
+    command: ["postgres", "-c", "wal_level=logical", "-c", "max_connections=200"]
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    mem_limit: 1g
+
+  migrate:
+    profiles: ["app"]
+    build: .
+    image: fleetforge-api:dev
+    command: ["alembic", "upgrade", "head"]
+    environment: *db-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    profiles: ["app"]
+    image: fleetforge-api:dev
+    environment:
+      <<: *db-env
+      # Uvicorn reads its process count from WEB_CONCURRENCY. One Python process is
+      # GIL-bound (measured: ~1.5 cores busy, PostgreSQL ~20%); see benchmarks/README.md.
+      WEB_CONCURRENCY: "${API_PROCESSES:-4}"
+      # Per process: total connections = processes x (pool + overflow) = 4 x 15 = 60.
+      FLEETFORGE_DB_POOL_SIZE: "10"
+      FLEETFORGE_DB_MAX_OVERFLOW: "5"
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz')"]
+      # Each check starts a Python interpreter (~0.25 s CPU), so keep it infrequent.
+      interval: 15s
+      start_interval: 1s
+      start_period: 30s
+      timeout: 3s
+      retries: 5
+    mem_limit: 768m
+
+volumes:
+  pgdata:

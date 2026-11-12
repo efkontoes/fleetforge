@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fleetforge"
+version = "0.1.0"
+description = "Fault-tolerant data platform for autonomous robot fleets (Milestone 1: operational foundation)"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.8",
+    "pydantic-settings>=2.4",
+    "sqlalchemy>=2.0.30",
+    "psycopg[binary,pool]>=3.2",
+    "alembic>=1.13",
+    "prometheus-client>=0.20",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2",
+    "testcontainers[postgres]>=4.7",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+fleet-sim = "fleetforge.simulator.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "integration: needs a real PostgreSQL instance",
+]
+filterwarnings = [
+    # Starlette's TestClient nudges towards httpx2; httpx is still supported and used
+    # by the simulator, so one HTTP client library is kept for now.
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]

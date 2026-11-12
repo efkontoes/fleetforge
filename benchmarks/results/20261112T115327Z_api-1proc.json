@@ -1,0 +1,163 @@
+{
+  "measured_at": "2026-11-12T11:53:27.435655+00:00",
+  "seed": 1794484039,
+  "environment": {
+    "platform": "Linux-5.15.146.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+    "cpus": 8,
+    "mem_total_gib": 3.7,
+    "api": "1 uvicorn process in Docker, sync handlers, DB pool 20",
+    "client": "same host, httpx, robots partitioned by robot_id across worker threads"
+  },
+  "faults": {
+    "duplicate_rate": 0.02,
+    "reorder_rate": 0.02,
+    "invalid_battery_rate": 0.01,
+    "missing_field_rate": 0.01,
+    "reboot_rate": 0.002,
+    "max_delay_ticks": 3
+  },
+  "ingest": [
+    {
+      "workers": 1,
+      "robots": 500,
+      "telemetry_events": 10186,
+      "elapsed_s": 133.83,
+      "throughput_eps": 76.1,
+      "latency_ms": {
+        "p50": 11.29,
+        "p95": 22.69,
+        "p99": 27.26,
+        "max": 58.89
+      },
+      "retries": 0,
+      "outcomes": {
+        "APPLIED/-": 9682,
+        "DUPLICATE/-": 80,
+        "REJECTED/BATTERY_OUT_OF_RANGE": 100,
+        "REJECTED/MISSING_FIELD": 110,
+        "STALE/STALE_SEQUENCE": 214
+      },
+      "rejected_total": 424,
+      "matches_oracle": true
+    },
+    {
+      "workers": 4,
+      "robots": 500,
+      "telemetry_events": 10200,
+      "elapsed_s": 37.2,
+      "throughput_eps": 274.2,
+      "latency_ms": {
+        "p50": 12.1,
+        "p95": 20.3,
+        "p99": 29.01,
+        "max": 111.67
+      },
+      "retries": 0,
+      "outcomes": {
+        "APPLIED/-": 9712,
+        "DUPLICATE/-": 80,
+        "REJECTED/BATTERY_OUT_OF_RANGE": 97,
+        "REJECTED/MISSING_FIELD": 85,
+        "STALE/STALE_SEQUENCE": 226
+      },
+      "rejected_total": 408,
+      "matches_oracle": true
+    },
+    {
+      "workers": 8,
+      "robots": 500,
+      "telemetry_events": 10175,
+      "elapsed_s": 40.724,
+      "throughput_eps": 249.9,
+      "latency_ms": {
+        "p50": 28.64,
+        "p95": 38.81,
+        "p99": 45.94,
+        "max": 142.26
+      },
+      "retries": 0,
+      "outcomes": {
+        "APPLIED/-": 9691,
+        "DUPLICATE/-": 68,
+        "REJECTED/BATTERY_OUT_OF_RANGE": 115,
+        "REJECTED/MISSING_FIELD": 91,
+        "STALE/STALE_SEQUENCE": 210
+      },
+      "rejected_total": 416,
+      "matches_oracle": true
+    },
+    {
+      "workers": 16,
+      "robots": 500,
+      "telemetry_events": 10218,
+      "elapsed_s": 53.836,
+      "throughput_eps": 189.8,
+      "latency_ms": {
+        "p50": 71.25,
+        "p95": 142.19,
+        "p99": 238.4,
+        "max": 575.58
+      },
+      "retries": 0,
+      "outcomes": {
+        "APPLIED/-": 9668,
+        "DUPLICATE/-": 77,
+        "REJECTED/BATTERY_OUT_OF_RANGE": 101,
+        "REJECTED/MISSING_FIELD": 113,
+        "STALE/STALE_SEQUENCE": 259
+      },
+      "rejected_total": 473,
+      "matches_oracle": true
+    },
+    {
+      "workers": 32,
+      "robots": 500,
+      "telemetry_events": 10186,
+      "elapsed_s": 50.057,
+      "throughput_eps": 203.5,
+      "latency_ms": {
+        "p50": 134.23,
+        "p95": 231.08,
+        "p99": 296.29,
+        "max": 445.13
+      },
+      "retries": 0,
+      "outcomes": {
+        "APPLIED/-": 9702,
+        "DUPLICATE/-": 68,
+        "REJECTED/BATTERY_OUT_OF_RANGE": 89,
+        "REJECTED/MISSING_FIELD": 90,
+        "STALE/STALE_SEQUENCE": 237
+      },
+      "rejected_total": 416,
+      "matches_oracle": true
+    }
+  ],
+  "state_reads": {
+    "requests": 2000,
+    "latency_ms": {
+      "p50": 4.11,
+      "p95": 5.45,
+      "p99": 6.23
+    }
+  },
+  "database": {
+    "server_version": "17.11 (Debian 17.11-1.pgdg13+2)",
+    "synchronous_commit": "on",
+    "fsync": "on",
+    "rows": {
+      "robots": 2520,
+      "robot_latest_state": 2520,
+      "telemetry_rejections": 2339
+    },
+    "state_query": {
+      "execution_ms": 0.059,
+      "planning_ms": 0.771,
+      "plan": [
+        "Nested Loop",
+        "Index Scan on robot_latest_state using robot_latest_state_pkey",
+        "Index Scan on missions using uq_missions_one_active_per_robot"
+      ]
+    }
+  }
+}
