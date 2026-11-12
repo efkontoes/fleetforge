@@ -248,3 +248,56 @@ def _api_ready(c) -> bool:
         return c.get("/readyz").status_code == 200
     except Exception:
         return False
+
+
+def test_quiet_captured_tables_do_not_pin_wal_under_telemetry_load(
+    fresh_topic, stack_settings, stack_db
+):
+    """Regression for the 531 MB finding: telemetry writes lots of WAL that no CDC
+    publication cares about. Without heartbeat.action.query, a slot whose tables are
+    quiet never confirms a newer LSN and pins all of it (measured: 531 MB after a
+    benchmark). With it, the slots retain only a small fraction of the WAL produced."""
+    from fleetforge.projector.main import Projector
+    from fleetforge.simulator.fleet import FaultConfig, SimConfig, generate
+    from fleetforge.simulator.kafka_publisher import HttpRegistrar, publish
+
+    from .conftest import REGISTRY
+
+    def wal_mb():
+        with stack_db.connect() as conn:
+            return conn.execute(
+                text("SELECT (pg_wal_lsn_diff(pg_current_wal_lsn(), '0/0') / 1048576.0)::float8")
+            ).scalar_one()
+
+    def retained_mb():
+        with stack_db.connect() as conn:
+            return conn.execute(
+                text(
+                    "SELECT coalesce(max(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) / 1048576.0, 0)::float8"
+                    " FROM pg_replication_slots"
+                )
+            ).scalar_one()
+
+    start = wal_mb()
+    items = generate(
+        SimConfig(seed=int(time.time()) % 10**6 + 77, robots=250, ticks=200, faults=FaultConfig())
+    )
+    publish(
+        items,
+        bootstrap=BOOTSTRAP,
+        registry_url=REGISTRY,
+        topic=fresh_topic,
+        registrar=HttpRegistrar(API),
+    )
+    settings = stack_settings.model_copy(update={"projector_batch_size": 50})  # more WAL
+    Projector(settings, stack_db, topic=fresh_topic, group=f"wal-{uuid.uuid4().hex[:8]}").run(
+        max_idle_s=4
+    )
+    produced = wal_mb() - start
+    assert produced > 10, f"load produced only {produced:.1f} MB of WAL; test would prove nothing"
+
+    took = wait_until(lambda: retained_mb() < produced * 0.1, 180, 5, "slots to release WAL")
+    print(
+        f"\nload wrote {produced:.0f} MB of WAL; slots retained <10% of it within {took:.0f}s "
+        f"(now {retained_mb():.1f} MB)"
+    )

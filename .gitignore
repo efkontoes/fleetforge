@@ -6,3 +6,5 @@ __pycache__/
 .env
 *.jsonl
 build/
+backups/
+benchmarks/results/*.raw.json

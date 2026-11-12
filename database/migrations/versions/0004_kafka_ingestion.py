@@ -33,11 +33,14 @@ def upgrade() -> None:
     # change operational state for a reason other than being a duplicate. Rows
     # carry their transport coordinates and a lifecycle status, so permanent data
     # errors can be inspected, corrected and replayed.
-    op.execute("""
+    op.execute(
+        """
         ALTER TABLE fleet.telemetry_rejections
             DROP CONSTRAINT telemetry_rejections_reason_code_check,
             ADD CONSTRAINT telemetry_rejections_reason_code_check
-                CHECK (reason_code IN """ + REASON_CODES + """),
+                CHECK (reason_code IN """
+        + REASON_CODES
+        + """),
             ADD COLUMN source TEXT NOT NULL DEFAULT 'http'
                 CHECK (source IN ('http', 'kafka', 'replay')),
             ADD COLUMN source_topic TEXT,
@@ -57,7 +60,8 @@ def upgrade() -> None:
                 OR (source_topic IS NOT NULL AND source_partition IS NOT NULL
                     AND source_offset IS NOT NULL)
             )
-    """)
+    """
+    )
     # Ordering outcomes are facts about delivery, not data errors: recorded, never retried.
     op.execute("""
         UPDATE fleet.telemetry_rejections
@@ -108,7 +112,8 @@ def upgrade() -> None:
         CREATE TABLE fleet.replay_runs (
             replay_id    UUID PRIMARY KEY,
             requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-            mode         TEXT NOT NULL CHECK (mode IN ('EVENT', 'OFFSET_RANGE', 'QUARANTINE', 'CORRECTION')),
+            mode         TEXT NOT NULL
+                CHECK (mode IN ('EVENT', 'OFFSET_RANGE', 'QUARANTINE', 'CORRECTION')),
             selector     JSONB NOT NULL,
             dry_run      BOOLEAN NOT NULL,
             operator     TEXT NOT NULL,
@@ -140,14 +145,18 @@ def downgrade() -> None:
     op.execute("DROP TABLE fleet.consumer_offsets")
     op.execute("DROP VIEW fleet.telemetry_quarantine")
     op.execute("DELETE FROM fleet.telemetry_rejections WHERE reason_code NOT IN " + M1_REASON_CODES)
-    op.execute("""
+    op.execute(
+        """
         ALTER TABLE fleet.telemetry_rejections
             DROP CONSTRAINT telemetry_rejections_kafka_coordinates,
             DROP CONSTRAINT telemetry_rejections_reason_code_check,
             ADD CONSTRAINT telemetry_rejections_reason_code_check
-                CHECK (reason_code IN """ + M1_REASON_CODES + """),
+                CHECK (reason_code IN """
+        + M1_REASON_CODES
+        + """),
             DROP COLUMN source, DROP COLUMN source_topic, DROP COLUMN source_partition,
             DROP COLUMN source_offset, DROP COLUMN error_category, DROP COLUMN retry_eligible,
             DROP COLUMN status, DROP COLUMN consumer_version, DROP COLUMN payload_bytes,
             DROP COLUMN updated_at, DROP COLUMN resolution
-    """)
+    """
+    )

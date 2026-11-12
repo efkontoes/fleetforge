@@ -21,5 +21,6 @@
   "key.converter": "org.apache.kafka.connect.json.JsonConverter",
   "key.converter.schemas.enable": "false",
   "value.converter": "org.apache.kafka.connect.json.JsonConverter",
-  "value.converter.schemas.enable": "false"
+  "value.converter.schemas.enable": "false",
+  "heartbeat.action.query": "INSERT INTO fleet.cdc_heartbeat (connector) VALUES ('reference')"
 }

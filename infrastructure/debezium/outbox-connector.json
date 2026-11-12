@@ -30,5 +30,6 @@
   "transforms.outbox.route.by.field": "aggregate_type",
   "transforms.outbox.route.topic.replacement": "fleet.${routedByValue}-events.v1",
   "transforms.outbox.table.fields.additional.placement": "event_type:header:eventType,created_at:header:outboxCreatedAt",
-  "transforms.outbox.table.expand.json.payload": "true"
+  "transforms.outbox.table.expand.json.payload": "true",
+  "heartbeat.action.query": "INSERT INTO fleet.cdc_heartbeat (connector) VALUES ('outbox')"
 }

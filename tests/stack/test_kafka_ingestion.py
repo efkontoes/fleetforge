@@ -79,7 +79,10 @@ def test_schema_evolution_on_the_real_registry(fresh_topic, stack_settings, stac
         return r
 
     producer = Producer({"bootstrap.servers": BOOTSTRAP, "enable.idempotence": True})
-    values = [enc_v1.encode(rec(1)), b"\x00\x00\x00\x99garbage", b"not avro at all",
+    # Unique garbage per run: undecodable records are deduplicated by a hash of their
+    # bytes, so identical garbage from an earlier run would (correctly) not add a row.
+    tag = uuid.uuid4().hex.encode()
+    values = [enc_v1.encode(rec(1)), b"\x00\x00\x00\x99garbage-" + tag, b"not avro at all " + tag,
               enc_v2.encode(rec(2, heading_rad=1.57)), enc_v1.encode(rec(3))]  # fmt: skip
     for v in values:
         producer.produce(fresh_topic, key=robot.encode(), value=v)
