@@ -45,9 +45,15 @@ class Expectation:
     rejection_rows: set[tuple[str, str]] = field(default_factory=set)  # (dedup_key, reason)
     latest: dict[UUID, dict[str, Any]] = field(default_factory=dict)  # robot -> payload
     state_versions: Counter = field(default_factory=Counter)  # robot -> # applied
+    # (event_id or dedup key, outcome, reason) per delivery: accepted/rejected identities
+    event_outcomes: Counter = field(default_factory=Counter)
 
 
-def expected(items: list[Item], received_at: datetime | None = None) -> Expectation:
+def expected(
+    items: list[Item], received_at: datetime | None = None, transport: str = "http"
+) -> Expectation:
+    """transport="kafka": events with the missing_field fault travel as schema-bypassing
+    raw JSON (see simulator.kafka_publisher) and are expected as MALFORMED_PAYLOAD."""
     received_at = received_at or datetime.now(UTC)
     skew = timedelta(minutes=5)
     exp = Expectation()
@@ -59,6 +65,7 @@ def expected(items: list[Item], received_at: datetime | None = None) -> Expectat
     def reject(rej: Rejection, event_id, body, outcome="REJECTED"):
         exp.outcomes[(outcome, rej.reason_code.value)] += 1
         exp.rejection_rows.add((dedup_key(event_id, body), rej.reason_code.value))
+        exp.event_outcomes[(dedup_key(event_id, body), outcome, rej.reason_code.value)] += 1
 
     for item in items:
         if isinstance(item, RegisterRobot):
@@ -71,6 +78,10 @@ def expected(items: list[Item], received_at: datetime | None = None) -> Expectat
             continue
 
         body = item.body()
+        if transport == "kafka" and item.fault == "missing_field":
+            event_id, _ = identity_hints(payload_for_audit(body))
+            reject(Rejection(ReasonCode.MALFORMED_PAYLOAD), event_id, body)
+            continue
         parsed = parse_event(body)
         if isinstance(parsed, Rejection):
             event_id, _ = identity_hints(payload_for_audit(body))
@@ -95,8 +106,10 @@ def expected(items: list[Item], received_at: datetime | None = None) -> Expectat
             exp.latest[ev.robot_id] = item.payload
             exp.state_versions[ev.robot_id] += 1
             exp.outcomes[("APPLIED", None)] += 1
+            exp.event_outcomes[(str(ev.event_id), "APPLIED", None)] += 1
         elif decision is Decision.DUPLICATE:
             exp.outcomes[("DUPLICATE", None)] += 1
+            exp.event_outcomes[(str(ev.event_id), "DUPLICATE", None)] += 1
         else:
             code = "STALE_SEQUENCE" if decision is Decision.STALE else "SEQUENCE_CONFLICT"
             reject(Rejection(ReasonCode(code)), ev.event_id, body, _OUTCOME[decision])

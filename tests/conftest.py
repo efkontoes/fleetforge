@@ -30,7 +30,8 @@ POSTGRES_IMAGE = (
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TABLES = (
     "fleet.robot_latest_state, fleet.telemetry_rejections, fleet.outbox_events, "
-    "fleet.mission_events, fleet.missions, fleet.robot_boots, fleet.robots"
+    "fleet.mission_events, fleet.missions, fleet.robot_boots, fleet.robots, "
+    "fleet.consumer_offsets, fleet.replay_runs, downstream.mission_status"
 )
 
 

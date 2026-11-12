@@ -1,0 +1,149 @@
+{
+  "type": "record",
+  "name": "TelemetryEvent",
+  "namespace": "io.fleetforge.telemetry",
+  "doc": "One robot observation. Business ordering = (boot_number, sequence_number); Kafka partition/offset/timestamp are transport metadata and are NOT part of this record.",
+  "fields": [
+    {
+      "name": "schema_version",
+      "type": "int",
+      "doc": "Business contract major version. Avro revisions within a major version are tracked by the registry."
+    },
+    {
+      "name": "event_id",
+      "type": {
+        "type": "string",
+        "logicalType": "uuid"
+      },
+      "doc": "Stable identity, identical across retries and redeliveries."
+    },
+    {
+      "name": "robot_id",
+      "type": {
+        "type": "string",
+        "logicalType": "uuid"
+      }
+    },
+    {
+      "name": "boot_id",
+      "type": {
+        "type": "string",
+        "logicalType": "uuid"
+      }
+    },
+    {
+      "name": "boot_number",
+      "type": "long",
+      "doc": "Server-assigned at boot registration; verified by the projector against fleet.robot_boots."
+    },
+    {
+      "name": "sequence_number",
+      "type": "long",
+      "doc": "Monotonic within one boot, starts at 0."
+    },
+    {
+      "name": "observed_at",
+      "type": {
+        "type": "long",
+        "logicalType": "timestamp-micros"
+      },
+      "doc": "Robot clock. Stored, never used for ordering."
+    },
+    {
+      "name": "firmware_version",
+      "type": "string"
+    },
+    {
+      "name": "battery_pct",
+      "type": "string",
+      "doc": "INCOMPATIBLE on purpose (double -> string). Used only by tests to prove the registry rejects it."
+    },
+    {
+      "name": "position",
+      "type": {
+        "type": "record",
+        "name": "Position",
+        "fields": [
+          {
+            "name": "x_m",
+            "type": "double"
+          },
+          {
+            "name": "y_m",
+            "type": "double"
+          }
+        ]
+      }
+    },
+    {
+      "name": "heading_rad",
+      "type": [
+        "null",
+        "double"
+      ],
+      "default": null,
+      "doc": "Added in revision 2. Optional with a default, so v2 readers accept v1 data (BACKWARD compatible)."
+    },
+    {
+      "name": "sensors",
+      "default": null,
+      "type": [
+        "null",
+        {
+          "type": "record",
+          "name": "SensorReadings",
+          "fields": [
+            {
+              "name": "motor_temp_c",
+              "type": [
+                "null",
+                "double"
+              ],
+              "default": null
+            },
+            {
+              "name": "lidar_ok",
+              "type": [
+                "null",
+                "boolean"
+              ],
+              "default": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "correction_of",
+      "default": null,
+      "type": [
+        "null",
+        {
+          "type": "string",
+          "logicalType": "uuid"
+        }
+      ],
+      "doc": "Set only on a correction event: the event_id of the rejected event it supersedes."
+    },
+    {
+      "name": "producer",
+      "type": {
+        "type": "record",
+        "name": "ProducerInfo",
+        "fields": [
+          {
+            "name": "producer_id",
+            "type": "string"
+          },
+          {
+            "name": "produced_at",
+            "type": {
+              "type": "long",
+              "logicalType": "timestamp-micros"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
