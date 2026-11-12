@@ -1,0 +1,131 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "${{ env.PYTHON_VERSION }}", cache: pip}
+      - run: pip install ruff==0.15.*
+      - run: ruff check src tests database benchmarks scripts
+      - run: ruff format --check src tests database benchmarks scripts
+      - name: Compose file is valid for every profile
+        run: |
+          sh scripts/make-env.sh
+          for p in core processing cdc observability full; do docker compose --profile $p config -q; done
+      - name: Prometheus config and alert rules are valid
+        run: docker run --rm --entrypoint promtool -v "$PWD/infrastructure/prometheus:/p" prom/prometheus:v3.5.0 check config /p/prometheus.yml
+      - name: Grafana dashboard is generated from source
+        run: python scripts/build_dashboard.py && git diff --exit-code infrastructure/grafana/dashboards
+
+  unit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "${{ env.PYTHON_VERSION }}", cache: pip}
+      - run: pip install -e '.[dev]'
+      - run: pytest tests/unit -p no:logging
+
+  migrations:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17
+        env: {POSTGRES_USER: ci, POSTGRES_PASSWORD: ci, POSTGRES_DB: fleetforge}
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U ci" --health-interval 2s --health-retries 30
+    env:
+      FLEETFORGE_DATABASE_URL: postgresql+psycopg://ci:ci@localhost:5432/fleetforge
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "${{ env.PYTHON_VERSION }}", cache: pip}
+      - run: pip install -e .
+      - name: upgrade -> downgrade to base -> upgrade (every migration is reversible)
+        run: |
+          alembic upgrade head
+          alembic downgrade base
+          alembic upgrade head
+          alembic current | grep -q '(head)'
+
+  integration:
+    # Real PostgreSQL 17 as a service container; same suites run locally via Testcontainers.
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17
+        env: {POSTGRES_USER: ci, POSTGRES_PASSWORD: ci, POSTGRES_DB: fleetforge}
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U ci" --health-interval 2s --health-retries 30
+    env:
+      FLEETFORGE_TEST_DATABASE_URL: postgresql+psycopg://ci:ci@localhost:5432/fleetforge
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "${{ env.PYTHON_VERSION }}", cache: pip}
+      - run: pip install -e '.[dev]'
+      - run: pytest tests/integration tests/failure -p no:logging
+
+  stack:
+    # Kafka, schema registry, Debezium, projector and consumers, as in local development.
+    # Benchmarks are deliberately NOT run here (see benchmarks/milestone-2-report.md).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    needs: [unit, integration]
+    env:
+      FLEETFORGE_STACK: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "${{ env.PYTHON_VERSION }}", cache: pip}
+      - run: pip install -e '.[dev]'
+      - run: sh scripts/make-env.sh
+      - name: Start the full stack
+        run: docker compose --profile full up -d --build --wait --wait-timeout 600
+      - name: Wait for both Debezium connectors to be RUNNING
+        run: |
+          for i in $(seq 1 90); do
+            ok=0
+            for c in outbox reference; do
+              curl -s localhost:8083/connectors/fleetforge-$c/status | grep -q '"tasks":\[{"id":0,"state":"RUNNING"' && ok=$((ok+1))
+            done
+            [ $ok -eq 2 ] && exit 0; sleep 2
+          done
+          exit 1
+      - name: Stack tests (non-disruptive)
+        run: pytest tests/stack -p no:logging -m "not disruptive"
+      - name: Stack tests (disruptive, one at a time)
+        run: pytest tests/stack -p no:logging -m disruptive
+      - name: Service logs on failure
+        if: failure()
+        run: docker compose --profile full logs --tail 200
+
+  security:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-python@v5
+        with: {python-version: "${{ env.PYTHON_VERSION }}", cache: pip}
+      - name: Known-vulnerable dependencies (runtime lock file)
+        run: pip install pip-audit && pip-audit -r requirements.lock --strict
+      - name: Secrets in the full git history
+        run: docker run --rm -v "$PWD:/repo" -w /repo zricethezav/gitleaks:v8.24.0 git --redact --no-banner --exit-code 1 .
