@@ -111,13 +111,13 @@ services:
     profiles: *core-profiles
     image: quay.io/apicurio/apicurio-registry:3.3.4@sha256:3ee4423c0f212c364d9525f7ab22ae1a009f610f3e6b8fc2cdba8b2ae68de460
     environment:
-      # Persistent storage: schema ids are embedded in every Kafka message, so they
-      # must outlive the registry process or old messages become undecodable.
-      APICURIO_STORAGE_KIND: sql
-      APICURIO_STORAGE_SQL_KIND: postgresql
-      APICURIO_DATASOURCE_URL: jdbc:postgresql://postgres:5432/apicurio
-      APICURIO_DATASOURCE_USERNAME: apicurio
-      APICURIO_DATASOURCE_PASSWORD: ${APICURIO_DB_PASSWORD:?run make env}
+      # KafkaSQL storage: schemas live in a compacted Kafka topic, i.e. in the same
+      # failure domain as the messages that embed their ids. (First version used the
+      # operational PostgreSQL; a database outage then also blocked producers and
+      # could make consumers misread valid records. Found by the DB-restart test.)
+      APICURIO_STORAGE_KIND: kafkasql
+      APICURIO_KAFKASQL_BOOTSTRAP_SERVERS: kafka:9092
+      APICURIO_KAFKASQL_TOPIC: _schemas_apicurio
       JAVA_OPTS_APPEND: -Xmx192m -Xms64m
     ports: ["127.0.0.1:8081:8080"]
     healthcheck:
@@ -126,7 +126,7 @@ services:
       timeout: 3s
       retries: 40
     depends_on:
-      migrate: {condition: service_completed_successfully}
+      kafka: {condition: service_healthy}
     mem_limit: 448m
 
   schema-init:

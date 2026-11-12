@@ -52,8 +52,10 @@ class Projector:
         processor: BatchProcessor | None = None,
         fault_hook: Callable[[str], None] | None = None,
         consumer_conf: dict | None = None,
+        seek_to_ledger: bool = True,
     ):
         self.s = settings
+        self.seek_to_ledger = seek_to_ledger  # False only in tests: trust Kafka's offsets
         self.engine = engine
         self.topic = topic or settings.telemetry_topic
         self.group = group or settings.projector_group
@@ -88,8 +90,10 @@ class Projector:
 
     def _on_assign(self, consumer: Consumer, partitions: list[TopicPartition]) -> None:
         """The DB ledger, not Kafka's committed offset, decides where to resume."""
-        with self.engine.connect() as conn:
-            ledger = sqlb.read_ledger(conn, self.group, self.topic)
+        ledger = {}
+        if self.seek_to_ledger:
+            with self.engine.connect() as conn:
+                ledger = sqlb.read_ledger(conn, self.group, self.topic)
         for tp in partitions:
             if tp.partition in ledger:
                 tp.offset = ledger[tp.partition]

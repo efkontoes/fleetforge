@@ -136,3 +136,36 @@ class TestTaxonomy:
         assert is_recoverable(psycopg.OperationalError("connection refused"))
         assert not is_recoverable(IntegrityError("x", {}, Exception()))
         assert not is_recoverable(ValueError("bug"))
+
+
+class TestRegistryOutageClassification:
+    """Regression: a registry outage must never be recorded as bad data."""
+
+    def test_registry_5xx_is_recoverable_but_unknown_schema_id_is_permanent(self):
+        from confluent_kafka.schema_registry.error import SchemaRegistryError
+
+        from fleetforge.kafka.codec import (
+            DecodeError,
+            RegistryUnavailable,
+            TelemetryDecoder,
+        )
+
+        class FailingDeserializer:
+            def __init__(self, exc):
+                self.exc = exc
+
+            def __call__(self, value, ctx):
+                raise self.exc
+
+        dec = TelemetryDecoder.__new__(TelemetryDecoder)
+        dec._ctx = None
+        framed = b"\x00\x00\x00\x00\x01payload"
+        dec._de = FailingDeserializer(SchemaRegistryError(500, 50001, "db down"))
+        with pytest.raises(RegistryUnavailable):
+            dec.decode(framed)
+        assert is_recoverable(RegistryUnavailable("x"))
+        dec._de = FailingDeserializer(SchemaRegistryError(404, 40403, "schema not found"))
+        with pytest.raises(DecodeError):
+            dec.decode(framed)
+        with pytest.raises(DecodeError):
+            dec.decode(b"{not avro}")

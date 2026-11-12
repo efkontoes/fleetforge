@@ -106,3 +106,23 @@ def assert_state_matches_oracle(state: dict, exp) -> None:
         assert (row["battery_pct"], row["x_m"], row["y_m"]) == (
             payload["battery_pct"], payload["x_m"], payload["y_m"])  # fmt: skip
         assert row["state_version"] == exp.state_versions[robot_id], robot_id
+
+
+def robot_rejection_rows(db: Engine, items: list[Item]) -> set[tuple[str, str]]:
+    """Kafka-sourced audit rows belonging to one simulated fleet (shared stack DB)."""
+    from fleetforge.domain.telemetry import dedup_key, identity_hints, payload_for_audit
+
+    keys = set()
+    for it in items:
+        if isinstance(it, Telemetry):
+            eid, _ = identity_hints(payload_for_audit(it.body()))
+            keys.add(dedup_key(eid, it.body()))
+    with db.connect() as c:
+        rows = c.execute(
+            text(
+                "SELECT dedup_key, reason_code FROM fleet.telemetry_rejections"
+                " WHERE source = 'kafka' AND dedup_key = ANY(:k)"
+            ),
+            {"k": list(keys)},
+        )
+        return {(r.dedup_key, r.reason_code) for r in rows}

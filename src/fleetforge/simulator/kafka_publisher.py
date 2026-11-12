@@ -127,6 +127,7 @@ def publish(
     start_index: int = 0,
     crash_after: int | None = None,
     on_delivery: Callable[[int], None] | None = None,
+    pace_eps: float | None = None,
 ) -> PublishReport:
     """Publish items[start_index:]. `crash_after=n` simulates a process crash after n
     produce() calls: queued but unacknowledged messages are purged, not flushed."""
@@ -153,9 +154,11 @@ def publish(
 
         return cb
 
-    for index in range(start_index, len(items)):
+    for index in range(len(items)):
         item = items[index]
-        if isinstance(item, RegisterRobot):
+        if index < start_index and isinstance(item, Telemetry):
+            continue  # already acknowledged before the restart
+        if isinstance(item, RegisterRobot):  # registrations are idempotent: always replayed
             registrar.robot(item)
             firmware[item.robot_id] = item.firmware_version
             acked.add(index)
@@ -167,6 +170,10 @@ def publish(
         if crash_after is not None and report.produced >= crash_after:
             producer.purge()  # drop in-flight + queued: what a SIGKILL would do
             break
+        if pace_eps:  # sustained-rate mode: never get ahead of the schedule
+            ahead = report.produced / pace_eps - (time.perf_counter() - started)
+            if ahead > 0:
+                producer.poll(ahead)
         value = kafka_value(item, encoder, boot_numbers, firmware, producer_id)
         report.faults[item.fault or "none"] += 1
         while True:

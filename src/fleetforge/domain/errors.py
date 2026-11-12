@@ -71,6 +71,10 @@ PERMANENT_DB_ERRORS = (
 
 def is_recoverable(exc: BaseException) -> bool:
     """Infrastructure failures worth retrying in place (never quarantined)."""
+    from fleetforge.kafka.codec import RegistryUnavailable
+
+    if isinstance(exc, RegistryUnavailable):
+        return True
     if isinstance(exc, OperationalError | InterfaceError | PoolTimeoutError):
         return True
     if isinstance(exc, psycopg.OperationalError | psycopg.InterfaceError):

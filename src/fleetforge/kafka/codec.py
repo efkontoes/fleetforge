@@ -9,13 +9,36 @@ from typing import Any
 
 from confluent_kafka.schema_registry import SchemaRegistryClient
 from confluent_kafka.schema_registry.avro import AvroDeserializer, AvroSerializer
+from confluent_kafka.schema_registry.error import SchemaRegistryError
 from confluent_kafka.serialization import MessageField, SerializationContext
 
 from fleetforge.kafka.schemas import schema_str
 
 
 class DecodeError(Exception):
-    pass
+    """The bytes are not a valid telemetry record. Permanent: quarantine."""
+
+
+class RegistryUnavailable(Exception):
+    """The schema registry could not be asked. Says nothing about the record.
+    Recoverable: retry the batch, never quarantine (that would turn an outage into
+    'bad data' permanently)."""
+
+
+def _registry_down(exc: BaseException) -> bool:
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if isinstance(exc, SchemaRegistryError):
+            # 404 = unknown schema id: the record references something that does not
+            # exist. Everything else (5xx, auth, ...) is the registry's problem.
+            return exc.http_status_code != 404
+        name = type(exc).__name__
+        if name in {"ConnectError", "ConnectTimeout", "ReadTimeout", "RemoteProtocolError",
+                    "ConnectionError", "TimeoutException"}:  # fmt: skip
+            return True
+        exc = exc.__cause__ or exc.__context__
+    return False
 
 
 class TelemetryEncoder:
@@ -47,6 +70,8 @@ class TelemetryDecoder:
         try:
             rec = self._de(value, self._ctx)
         except Exception as exc:  # serializer raises several error types
+            if _registry_down(exc):
+                raise RegistryUnavailable(str(exc)) from exc
             raise DecodeError(f"{type(exc).__name__}: {exc}") from exc
         if not isinstance(rec, dict):
             raise DecodeError("decoded value is not a record")

@@ -46,6 +46,8 @@ testpaths = ["tests"]
 addopts = "-ra --strict-markers"
 markers = [
     "integration: needs a real PostgreSQL instance",
+    "stack: needs the running Compose stack (FLEETFORGE_STACK=1)",
+    "disruptive: stops or restarts stack services (run last, one at a time)",
 ]
 filterwarnings = [
     # Starlette's TestClient nudges towards httpx2; httpx is still supported and used
@@ -63,3 +65,5 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 [tool.ruff.lint.per-file-ignores]
 # PromQL expressions are data; wrapping them hurts readability more than long lines.
 "scripts/build_dashboard.py" = ["E501"]
+# Stack tests embed SQL and multi-service assertions; readability beats wrapping.
+"tests/stack/*" = ["E501"]

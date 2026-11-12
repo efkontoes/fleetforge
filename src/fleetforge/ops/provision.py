@@ -1,5 +1,5 @@
-"""Provision login credentials for the least-privilege roles created by migration 0005,
-plus the schema registry's own database. Idempotent; re-running rotates passwords.
+"""Provision login credentials for the least-privilege roles created by migration 0005.
+Idempotent; re-running rotates passwords.
 
 Passwords come only from the environment (generated into the git-ignored .env by
 `make env`). Nothing secret is stored in migrations or source control.
@@ -24,7 +24,6 @@ LOGIN_ROLES = {
     "fleetforge_cdc": "FLEETFORGE_CDC_DB_PASSWORD",
     "fleetforge_readonly": "FLEETFORGE_READONLY_DB_PASSWORD",
 }
-REGISTRY_ROLE, REGISTRY_DB, REGISTRY_PW = "apicurio", "apicurio", "APICURIO_DB_PASSWORD"
 
 
 def _dsn() -> str:
@@ -45,25 +44,6 @@ def provision(env: dict[str, str] | None = None) -> list[str]:
                 )
             )
             done.append(f"login enabled: {role}")
-        if env.get(REGISTRY_PW):
-            exists = conn.execute(
-                "SELECT 1 FROM pg_roles WHERE rolname = %s", (REGISTRY_ROLE,)
-            ).fetchone()
-            verb = "ALTER" if exists else "CREATE"
-            conn.execute(
-                sql.SQL(verb + " ROLE {} WITH LOGIN PASSWORD {} CONNECTION LIMIT 10").format(
-                    sql.Identifier(REGISTRY_ROLE), sql.Literal(env[REGISTRY_PW])
-                )
-            )
-            if not conn.execute(
-                "SELECT 1 FROM pg_database WHERE datname = %s", (REGISTRY_DB,)
-            ).fetchone():
-                conn.execute(
-                    sql.SQL("CREATE DATABASE {} OWNER {}").format(
-                        sql.Identifier(REGISTRY_DB), sql.Identifier(REGISTRY_ROLE)
-                    )
-                )
-            done.append("schema registry database ready")
     return done
 
 
