@@ -105,6 +105,43 @@ def _send_and_check(items, a: argparse.Namespace) -> int:
     return 0 if actual == want else 1
 
 
+def _publish(items, a: argparse.Namespace) -> int:
+    from fleetforge.simulator.kafka_publisher import publish_parallel
+
+    report = publish_parallel(
+        items,
+        a.processes,
+        a.api,
+        bootstrap=a.bootstrap,
+        registry_url=a.registry,
+        topic=a.topic,
+        producer_conf={
+            "compression.type": a.compression,
+            "linger.ms": a.linger_ms,
+            "batch.size": a.batch_bytes,
+        },  # fmt: skip
+    )
+    lat = sorted(report.ack_latencies_s)
+    out = {
+        **_summary(items),
+        "produced": report.produced,
+        "acknowledged": report.delivered,
+        "failed": len(report.failed),
+        "elapsed_s": round(report.elapsed_s, 3),
+        "produce_rate_eps": round(report.produced / max(report.elapsed_s, 1e-9), 1),
+        "producer_cpu_s": round(report.cpu_s, 2),
+        "backpressure_waits": report.backpressure_waits,
+        "ack_latency_ms": {
+            "p50": round(statistics.median(lat) * 1000, 2),
+            "p99": round(lat[int(0.99 * (len(lat) - 1))] * 1000, 2),
+        }
+        if lat
+        else None,
+    }  # fmt: skip
+    print(json.dumps(out, indent=2))
+    return 0 if not report.failed and report.delivered == report.produced else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="fleet-sim", description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -121,12 +158,27 @@ def main(argv: list[str] | None = None) -> int:
     _add_gen_args(r)
     _add_send_args(r)
 
+    k = sub.add_parser("publish", help="generate and publish telemetry to Kafka")
+    _add_gen_args(k)
+    k.add_argument("--api", default="http://localhost:8000", help="registration endpoint")
+    k.add_argument("--bootstrap", default="localhost:29092")
+    k.add_argument("--registry", default="http://localhost:8081/apis/ccompat/v7")
+    k.add_argument("--topic", default="telemetry.raw.v1")
+    k.add_argument("--processes", type=int, default=1, help="producer OS processes")
+    k.add_argument(
+        "--compression", default="lz4", choices=["none", "lz4", "zstd", "snappy", "gzip"]
+    )
+    k.add_argument("--linger-ms", type=int, default=20)
+    k.add_argument("--batch-bytes", type=int, default=262144)
+
     a = parser.parse_args(argv)
     if a.cmd == "generate":
         items = generate(_config(a))
         a.out.write_bytes(to_jsonl(items))
         print(json.dumps(_summary(items), indent=2))
         return 0
+    if a.cmd == "publish":
+        return _publish(generate(_config(a)), a)
     if a.cmd == "send":
         return _send_and_check(from_jsonl(a.infile.read_bytes()), a)
     items = generate(_config(a))

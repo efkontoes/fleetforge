@@ -98,6 +98,11 @@ class Decoder(Protocol):
     def decode(self, value: bytes | None) -> dict[str, Any]: ...
 
 
+class _DryRunRollback(Exception):
+    def __init__(self, result: BatchResult):
+        self.result = result
+
+
 class PlanInvalidated(RuntimeError):
     """A concurrent writer changed a row the plan assumed; the batch is retried."""
 
@@ -175,8 +180,12 @@ class BatchProcessor:
         max_clock_skew: timedelta = timedelta(minutes=5),
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         fault_hook: Callable[[str], None] | None = None,
+        before_commit: Callable[[Connection, list[RecordResult]], None] | None = None,
+        dry_run: bool = False,
     ):
         self.engine = engine
+        self.before_commit = before_commit  # extra writes inside the same transaction
+        self.dry_run = dry_run  # run everything, then roll back
         self.decoder = decoder
         self.mode = Mode(mode)
         self.group = consumer_group  # None => no ledger (replay)
@@ -197,6 +206,8 @@ class BatchProcessor:
                 if self.mode is Mode.PER_EVENT:
                     return self._per_event(prepared)
                 return self._batched(prepared)
+            except _DryRunRollback as dry:
+                return dry.result
             except PlanInvalidated:
                 log.warning("plan invalidated by a concurrent writer; retrying batch",
                             extra={"attempt": attempt})  # fmt: skip
@@ -279,9 +290,14 @@ class BatchProcessor:
             if self.group:
                 sqlb.advance_ledger(conn, self.group, _next_offsets(todo))
             self.fault("before_commit")
+            result.results.extend(outcome[i] for i in range(len(todo)))
+            if self.before_commit:
+                self.before_commit(conn, result.results)
+            if self.dry_run:
+                result.next_offsets = _next_offsets(prepared)
+                raise _DryRunRollback(result)  # leaving the block rolls everything back
             t0 = time.perf_counter()
         result.commit_seconds.append(time.perf_counter() - t0)  # COMMIT ran on block exit
-        result.results.extend(outcome[i] for i in range(len(todo)))
         result.next_offsets = _next_offsets(prepared)
         return result
 
