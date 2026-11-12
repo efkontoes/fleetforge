@@ -49,9 +49,11 @@ def ingest(db, decoder, values, start=0):
 def quarantine(db, event_id, source="kafka"):
     """The original quarantine row (replays may add their own audit rows)."""
     with db.connect() as c:
-        return c.execute(text("SELECT reason_code, status, resolution FROM fleet.telemetry_rejections"
-                              " WHERE event_id = :e AND source = :s"),
-                         {"e": event_id, "s": source}).mappings().one()  # fmt: skip
+        sql = text(
+            "SELECT reason_code, status, resolution FROM fleet.telemetry_rejections"
+            " WHERE event_id = :e AND source = :s"
+        )
+        return c.execute(sql, {"e": event_id, "s": source}).mappings().one()
 
 
 def state(db, robot):
@@ -140,6 +142,9 @@ def test_correction_supersedes_a_rejected_event_with_a_new_identity(db, codec, r
 
 def _correction_id(db, original):
     with db.connect() as c:
-        return c.execute(text("SELECT selector->>'correction_event_id' FROM fleet.replay_runs"
-                              " WHERE mode = 'CORRECTION' AND selector->>'event_id' = :e"
-                              " ORDER BY requested_at LIMIT 1"), {"e": original}).scalar_one()  # fmt: skip
+        sql = text(
+            "SELECT selector->>'correction_event_id' FROM fleet.replay_runs"
+            " WHERE mode = 'CORRECTION' AND selector->>'event_id' = :e"
+            " ORDER BY requested_at LIMIT 1"
+        )
+        return c.execute(sql, {"e": original}).scalar_one()

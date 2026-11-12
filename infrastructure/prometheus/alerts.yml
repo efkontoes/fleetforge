@@ -1,0 +1,75 @@
+# Initial thresholds, chosen from the Milestone 2 benchmarks on a 4-core laptop.
+# Tune after observing real traffic: alert on symptoms users feel (stale state,
+# growing lag), keep "for:" long enough to ignore single slow batches.
+# No Alertmanager is deployed locally; alerts are visible in Prometheus (/alerts).
+groups:
+  - name: fleetforge-ingestion
+    rules:
+      - alert: ProjectorLagGrowing
+        # More than ~30 s of backlog at the design rate (5,000 ev/s) and not shrinking.
+        expr: sum(fleetforge_projector_consumer_lag) > 150000 and deriv(sum(fleetforge_projector_consumer_lag)[5m:]) > 0
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: Telemetry projector is falling behind
+          description: "Lag {{ $value }} records and growing. Check DB commit latency and projector CPU."
+
+      - alert: OperationalStateStale
+        expr: histogram_quantile(0.95, sum(rate(fleetforge_projector_event_to_state_seconds_bucket[5m])) by (le)) > 10
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: p95 event-to-state latency above 10 s
+
+      - alert: ProjectorDatabaseUnavailable
+        expr: min(fleetforge_projector_db_available) == 0
+        for: 1m
+        labels: {severity: page}
+        annotations:
+          summary: Projector cannot write to PostgreSQL; Kafka is buffering
+
+      - alert: QuarantineRateHigh
+        # >5% of records quarantined as permanent data errors (the simulator injects ~3-4%).
+        expr: sum(rate(fleetforge_projector_quarantined_total[10m])) / sum(rate(fleetforge_projector_records_total[10m])) > 0.05
+        for: 10m
+        labels: {severity: ticket}
+        annotations:
+          summary: More than 5% of telemetry is being quarantined
+
+      - alert: ProjectorRetrying
+        expr: sum(rate(fleetforge_projector_retries_total[5m])) > 0
+        for: 2m
+        labels: {severity: ticket}
+        annotations:
+          summary: Projector is retrying batches after recoverable errors
+
+  - name: fleetforge-cdc
+    rules:
+      - alert: CdcConnectorDown
+        expr: min(fleetforge_cdc_connector_up) == 0
+        for: 2m
+        labels: {severity: page}
+        annotations:
+          summary: A Debezium connector or task is not RUNNING
+
+      - alert: ReplicationSlotRetainingWal
+        # max_slot_wal_keep_size is 2 GB; warn well before the slot is invalidated.
+        expr: max(fleetforge_cdc_slot_retained_wal_bytes) > 512 * 1024 * 1024
+        for: 10m
+        labels: {severity: page}
+        annotations:
+          summary: A replication slot retains more than 512 MiB of WAL
+
+      - alert: ReplicationSlotInactive
+        expr: min(fleetforge_cdc_slot_active) == 0
+        for: 5m
+        labels: {severity: ticket}
+        annotations:
+          summary: A replication slot has no consumer attached
+
+      - alert: CdcEndToEndSlow
+        expr: histogram_quantile(0.95, sum(rate(fleetforge_cdc_end_to_end_seconds_bucket[10m])) by (le)) > 30
+        for: 10m
+        labels: {severity: ticket}
+        annotations:
+          summary: Outbox events take more than 30 s (p95) to reach the downstream consumer
