@@ -17,6 +17,7 @@ dependencies = [
     "alembic>=1.13",
     "prometheus-client>=0.20",
     "httpx>=0.27",
+    "confluent-kafka[avro,schemaregistry]>=2.16",
 ]
 
 [project.optional-dependencies]
@@ -28,9 +29,17 @@ dev = [
 
 [project.scripts]
 fleet-sim = "fleetforge.simulator.cli:main"
+fleet-projector = "fleetforge.projector.main:main"
+fleet-mission-consumer = "fleetforge.projector.missions:main"
+fleet-replay = "fleetforge.projector.replay:main"
+fleet-schemas = "fleetforge.kafka.schemas:main"
+fleet-ops-exporter = "fleetforge.ops.exporter:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"fleetforge.contracts" = ["avro/*.avsc"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

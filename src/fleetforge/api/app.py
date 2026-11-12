@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -12,7 +13,7 @@ from uuid import UUID
 from fastapi import FastAPI, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, generate_latest, multiprocess
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import InterfaceError, OperationalError
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
@@ -97,6 +98,11 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
 
     @app.get("/metrics", include_in_schema=False)
     def metrics() -> Response:
+        if os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
+            # Several uvicorn processes: aggregate their metric files into one view.
+            registry = CollectorRegistry()
+            multiprocess.MultiProcessCollector(registry)
+            return Response(generate_latest(registry), media_type=CONTENT_TYPE_LATEST)
         return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
     # ------------------------------------------------------------- robots
@@ -131,6 +137,8 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
         responses={409: {"model": TelemetryResult}, 422: {"model": TelemetryResult}},
     )
     async def ingest_telemetry(request: Request) -> JSONResponse:
+        if not settings.http_telemetry_enabled:
+            return _error(410, "HTTP_TELEMETRY_DISABLED", "publish telemetry to Kafka instead")
         body = await request.body()
         started = time.perf_counter()
         received_at = datetime.now(UTC)
