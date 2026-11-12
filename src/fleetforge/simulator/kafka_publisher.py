@@ -77,6 +77,46 @@ class HttpRegistrar:
         return r.json()["boot_number"]
 
 
+class KnownRegistrar:
+    """Registration already done (e.g. in bulk before a benchmark): only answers
+    boot numbers, so a producer measurement contains no HTTP calls."""
+
+    def __init__(self, boot_numbers: dict[str, int]):
+        self.boot_numbers = boot_numbers
+
+    def robot(self, item: RegisterRobot) -> None:
+        return None
+
+    def boot(self, item: RegisterBoot) -> int:
+        return self.boot_numbers[item.boot_id]
+
+
+def register_bulk(items: list[Item], api_url: str, threads: int = 8) -> dict[str, int]:
+    """Register all robots/boots through the API, robots in parallel, each robot's
+    boots in stream order (so server-assigned boot numbers follow the stream)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    by_robot: dict[str, list[Item]] = {}
+    for it in items:
+        if not isinstance(it, Telemetry):
+            by_robot.setdefault(it.robot_id, []).append(it)
+
+    def one(regs: list[Item]) -> dict[str, int]:
+        reg, out = HttpRegistrar(api_url), {}
+        for it in regs:
+            if isinstance(it, RegisterRobot):
+                reg.robot(it)
+            else:
+                out[it.boot_id] = reg.boot(it)
+        return out
+
+    numbers: dict[str, int] = {}
+    with ThreadPoolExecutor(threads) as pool:
+        for part in pool.map(one, by_robot.values()):
+            numbers.update(part)
+    return numbers
+
+
 @dataclass
 class PublishReport:
     produced: int = 0
@@ -86,6 +126,7 @@ class PublishReport:
     backpressure_waits: int = 0
     checkpoint: int = -1  # highest stream index such that it and all before it are acked
     elapsed_s: float = 0.0
+    active_s: float = 0.0  # longest single producer's own publish window (no fork/pickle)
     cpu_s: float = 0.0
     faults: Counter = field(default_factory=Counter)
 
@@ -193,6 +234,7 @@ def publish(
     producer.poll(0)
     report.checkpoint = _contiguous(acked, start_index)
     report.elapsed_s = time.perf_counter() - started
+    report.active_s = report.elapsed_s
     report.cpu_s = time.process_time() - cpu0
     return report
 
@@ -218,14 +260,18 @@ def _worker(args: tuple) -> PublishReport:
     part, kw = args
     kw = dict(kw)
     api = kw.pop("api_url")
-    return publish(part, registrar=HttpRegistrar(api), producer_id=f"fleet-sim-{os.getpid()}", **kw)
+    known = kw.pop("boot_numbers", None)
+    registrar = KnownRegistrar(known) if known is not None else HttpRegistrar(api)
+    return publish(part, registrar=registrar, producer_id=f"fleet-sim-{os.getpid()}", **kw)
 
 
 def publish_parallel(items: list[Item], processes: int, api_url: str, **kw: Any) -> PublishReport:
     """Robots are split across OS processes (no shared GIL); each robot's items stay
     in one process, in order, so per-robot ordering is preserved."""
     if processes <= 1:
-        return publish(items, registrar=HttpRegistrar(api_url), **kw)
+        known = kw.pop("boot_numbers", None)
+        reg = KnownRegistrar(known) if known is not None else HttpRegistrar(api_url)
+        return publish(items, registrar=reg, **kw)
     started = time.perf_counter()
     total = PublishReport()
     with ProcessPoolExecutor(max_workers=processes) as pool:
@@ -237,6 +283,7 @@ def publish_parallel(items: list[Item], processes: int, api_url: str, **kw: Any)
             total.ack_latencies_s += r.ack_latencies_s
             total.backpressure_waits += r.backpressure_waits
             total.cpu_s += r.cpu_s
+            total.active_s = max(total.active_s, r.elapsed_s)
             total.faults.update(r.faults)
     total.elapsed_s = time.perf_counter() - started
     return total

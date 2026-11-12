@@ -1,0 +1,75 @@
+{
+  "started_at": "2026-11-12T18:57:24.512806+00:00",
+  "command": "sustained",
+  "args": {
+    "cmd": "sustained",
+    "robots": 500,
+    "ticks": 75,
+    "seed": 509844,
+    "label": "c3-5k-rep1",
+    "producers": 2,
+    "consumers": 3,
+    "rates": [
+      5000
+    ],
+    "mode": "set:500",
+    "seconds": 30
+  },
+  "environment": {
+    "platform": "Linux-5.15.146.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+    "cpu": "Intel(R) Core(TM) i5-10210U CPU @ 1.60GHz",
+    "vcpus": 8,
+    "wsl_mem_total": "3901516 kB",
+    "swap_total": "1048576 kB",
+    "storage": "WSL2 ext4 virtual disk (Docker named volumes)",
+    "postgres": "postgres (PostgreSQL) 17.11 (Debian 17.11-1.pgdg13+2)",
+    "kafka_image": "apache/kafka:4.3.1 (KRaft, 1 broker, RF=1)",
+    "python": "3.12.3",
+    "docker_limits": "postgres 768m, kafka 768m (heap 384m), registry 448m, api 512m"
+  },
+  "result": {
+    "experiment": "sustained rate",
+    "runs": [
+      {
+        "target_rate_eps": 5000,
+        "events": 151507,
+        "mode": "set",
+        "batch_size": 500,
+        "consumers": 3,
+        "producer_processes": 2,
+        "achieved_produce_eps": 4611.0,
+        "producer_active_s": 32.86,
+        "producer_ack_latency_ms": {
+          "p50": 12.03,
+          "p95": 21.5,
+          "p99": 22.28,
+          "n": 151507
+        },
+        "processed": 151507,
+        "event_to_state_ms": {
+          "p50": 128.54,
+          "p95": 200.33,
+          "p99": 241.21,
+          "n": 136357
+        },
+        "max_event_to_state_s": 0.33,
+        "projector_cpu_cores_avg": 1.37,
+        "postgres": {
+          "transactions": 1972,
+          "tx_per_s": 60.0,
+          "wal_bytes": 42596512,
+          "wal_bytes_per_event": 281.2
+        },
+        "containers": {
+          "fleetforge-api-1": "2.29% 238.3MiB / 512MiB",
+          "fleetforge-schema-registry-1": "5.18% 231MiB / 448MiB",
+          "fleetforge-postgres-1": "0.37% 175.3MiB / 768MiB",
+          "fleetforge-kafka-1": "14.01% 379.8MiB / 768MiB"
+        },
+        "kept_up": true,
+        "matches_oracle": true,
+        "tail_drain_s": 0.03
+      }
+    ]
+  }
+}

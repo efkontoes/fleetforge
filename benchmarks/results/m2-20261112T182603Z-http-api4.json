@@ -1,0 +1,55 @@
+{
+  "started_at": "2026-11-12T18:25:03.028656+00:00",
+  "command": "http",
+  "args": {
+    "cmd": "http",
+    "robots": 200,
+    "ticks": 75,
+    "seed": 507903,
+    "label": "api4",
+    "processes": 4,
+    "threads": 8
+  },
+  "environment": {
+    "platform": "Linux-5.15.146.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+    "cpu": "Intel(R) Core(TM) i5-10210U CPU @ 1.60GHz",
+    "vcpus": 8,
+    "wsl_mem_total": "3901516 kB",
+    "swap_total": "1048576 kB",
+    "storage": "WSL2 ext4 virtual disk (Docker named volumes)",
+    "postgres": "postgres (PostgreSQL) 17.11 (Debian 17.11-1.pgdg13+2)",
+    "kafka_image": "apache/kafka:4.3.1 (KRaft, 1 broker, RF=1)",
+    "python": "3.12.3",
+    "docker_limits": "postgres 768m, kafka 768m (heap 384m), registry 448m, api 512m"
+  },
+  "result": {
+    "architecture": "A: HTTP -> PostgreSQL, one event per transaction",
+    "events": 15154,
+    "client_processes": 4,
+    "threads_per_process": 8,
+    "elapsed_s": 51.8,
+    "throughput_eps": 292.6,
+    "latency_ms": {
+      "p50": 16.63,
+      "p95": 29.01,
+      "p99": 36.06,
+      "n": 15154
+    },
+    "client_cpu_s": 34.2,
+    "client_cpu_cores_avg": 0.66,
+    "retries": 0,
+    "postgres": {
+      "transactions": 30381,
+      "tx_per_s": 586.5,
+      "wal_bytes": 6562560,
+      "wal_bytes_per_event": 433.1
+    },
+    "matches_oracle": true,
+    "containers": {
+      "fleetforge-api-1": "40.74% 290.4MiB / 512MiB",
+      "fleetforge-schema-registry-1": "0.62% 223.5MiB / 448MiB",
+      "fleetforge-postgres-1": "33.11% 81.49MiB / 768MiB",
+      "fleetforge-kafka-1": "20.42% 321.9MiB / 768MiB"
+    }
+  }
+}

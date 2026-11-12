@@ -67,3 +67,4 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 "scripts/build_dashboard.py" = ["E501"]
 # Stack tests embed SQL and multi-service assertions; readability beats wrapping.
 "tests/stack/*" = ["E501"]
+"benchmarks/*" = ["E501"]
