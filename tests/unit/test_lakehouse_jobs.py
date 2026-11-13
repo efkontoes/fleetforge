@@ -52,6 +52,7 @@ def test_spark_conf_wires_iceberg_jdbc_catalog_and_s3():
     assert conf["spark.sql.catalog.lake.io-impl"] == "org.apache.iceberg.aws.s3.S3FileIO"
     assert conf["spark.sql.session.timeZone"] == "UTC"
     assert conf["spark.jars.packages"].split(",") == list(versions.SPARK_PACKAGES)
+    assert "-XX:MaxMetaspaceSize=" in conf["spark.driver.extraJavaOptions"]  # off-heap bounded
 
 
 def test_baked_jars_replace_runtime_resolution(tmp_path):

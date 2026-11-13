@@ -89,7 +89,7 @@ services:
       PYTHONPATH: /workspace/src
     volumes: ["../..:/workspace:ro", "../../build/lakehouse-evidence:/evidence"]
     working_dir: /workspace
-    mem_limit: 1600m
+    mem_limit: 1800m
     entrypoint: ["python"]
 
   trino:

@@ -23,7 +23,13 @@ class LakehouseSettings(BaseSettings):
     s3_secret_key: str = ""
 
     spark_master: str = "local[2]"
-    driver_memory: str = "1g"
+    driver_memory: str = "1g"  # JVM heap only
+    # Off-heap ceilings. Without them the JVM grew to 1.35 GB RSS with a 768 MB heap
+    # and was OOM-killed by its container (measured; see the spec's test log).
+    driver_java_options: str = (
+        "-XX:MaxDirectMemorySize=256m -XX:MaxMetaspaceSize=320m -XX:ReservedCodeCacheSize=96m "
+        "-XX:ParallelGCThreads=2 -XX:ConcGCThreads=1 -XX:CICompilerCount=2"
+    )
     shuffle_partitions: int = 4
     jars_dir: str = ""  # baked jars (image); empty -> resolve SPARK_PACKAGES with Ivy
 

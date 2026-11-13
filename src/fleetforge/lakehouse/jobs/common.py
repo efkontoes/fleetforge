@@ -25,6 +25,7 @@ def spark_conf(s: LakehouseSettings) -> dict[str, str]:
     conf = {
         "spark.master": s.spark_master,
         "spark.driver.memory": s.driver_memory,  # only effective before the JVM starts
+        "spark.driver.extraJavaOptions": s.driver_java_options,
         "spark.sql.shuffle.partitions": str(s.shuffle_partitions),
         "spark.sql.session.timeZone": "UTC",
         "spark.sql.execution.arrow.pyspark.enabled": "true",
