@@ -27,7 +27,7 @@ import os
 import time
 import zlib
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -129,6 +129,11 @@ class PublishReport:
     active_s: float = 0.0  # longest single producer's own publish window (no fork/pickle)
     cpu_s: float = 0.0
     faults: Counter = field(default_factory=Counter)
+    # Benchmark tracing (trace_every > 0). Times are time.monotonic_ns(): CLOCK_MONOTONIC
+    # is system-wide on Linux, so it is comparable across processes on one host.
+    trace: list[tuple[int, int, int, int, int]] = field(default_factory=list)
+    #   (partition, offset, scheduled_ns, enqueued_ns, acked_ns) for offset % trace_every == 0
+    max_behind_s: float = 0.0  # worst lateness of a produce() call vs the pacing schedule
 
 
 def sensors_for(payload: dict[str, Any]) -> dict[str, Any]:
@@ -157,7 +162,7 @@ def kafka_value(
 
 
 def publish(
-    items: list[Item],
+    items: Iterable[Item],
     *,
     bootstrap: str,
     registry_url: str,
@@ -169,6 +174,7 @@ def publish(
     crash_after: int | None = None,
     on_delivery: Callable[[int], None] | None = None,
     pace_eps: float | None = None,
+    trace_every: int = 0,
 ) -> PublishReport:
     """Publish items[start_index:]. `crash_after=n` simulates a process crash after n
     produce() calls: queued but unacknowledged messages are purged, not flushed."""
@@ -181,22 +187,25 @@ def publish(
     firmware: dict[str, str] = {}
     acked: set[int] = set()
     started, cpu0 = time.perf_counter(), time.process_time()
+    started_ns = time.monotonic_ns()
 
-    def make_cb(index: int, t0: float):
-        def cb(err: KafkaError | None, _msg) -> None:
+    def make_cb(index: int, t0: float, sched_ns: int, enq_ns: int):
+        def cb(err: KafkaError | None, msg) -> None:
             if err is not None:
                 report.failed.append(f"index {index}: {err.str()}")
                 return
             report.delivered += 1
             report.ack_latencies_s.append(time.perf_counter() - t0)
             acked.add(index)
+            if trace_every and msg.offset() % trace_every == 0:
+                report.trace.append((msg.partition(), msg.offset(), sched_ns, enq_ns,
+                                     time.monotonic_ns()))  # fmt: skip
             if on_delivery:
                 on_delivery(index)
 
         return cb
 
-    for index in range(len(items)):
-        item = items[index]
+    for index, item in enumerate(items):
         if index < start_index and isinstance(item, Telemetry):
             continue  # already acknowledged before the restart
         if isinstance(item, RegisterRobot):  # registrations are idempotent: always replayed
@@ -217,10 +226,14 @@ def publish(
                 producer.poll(ahead)
         value = kafka_value(item, encoder, boot_numbers, firmware, producer_id)
         report.faults[item.fault or "none"] += 1
+        enq_ns = time.monotonic_ns()
+        sched_ns = started_ns + int(report.produced / pace_eps * 1e9) if pace_eps else enq_ns
+        report.max_behind_s = max(report.max_behind_s, (enq_ns - sched_ns) / 1e9)
         while True:
             try:
                 producer.produce(topic, key=item.robot_id.encode(), value=value,
-                                 on_delivery=make_cb(index, time.perf_counter()))  # fmt: skip
+                                 on_delivery=make_cb(index, time.perf_counter(), sched_ns,
+                                                     enq_ns))  # fmt: skip
                 break
             except BufferError:
                 report.backpressure_waits += 1
@@ -285,5 +298,7 @@ def publish_parallel(items: list[Item], processes: int, api_url: str, **kw: Any)
             total.cpu_s += r.cpu_s
             total.active_s = max(total.active_s, r.elapsed_s)
             total.faults.update(r.faults)
+            total.trace += r.trace
+            total.max_behind_s = max(total.max_behind_s, r.max_behind_s)
     total.elapsed_s = time.perf_counter() - started
     return total

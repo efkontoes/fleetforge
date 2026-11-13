@@ -267,6 +267,7 @@ class BatchProcessor:
         result = BatchResult(transactions=1)
         now = self.clock()
         with self.engine.begin() as conn:
+            self.fault("tx_begin")
             todo = self._skip_already_applied(conn, prepared, result)
             valid = [p for p in todo if p.obs is not None]
             self.cache.resolve(conn, [p.obs for p in valid])

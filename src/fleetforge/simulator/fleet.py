@@ -123,14 +123,18 @@ class _Robot:
 
 
 def generate(cfg: SimConfig) -> list[Item]:
+    return list(iter_generate(cfg))
+
+
+def iter_generate(cfg: SimConfig) -> Iterator[Item]:
+    """The same stream as generate(), produced lazily (long benchmark runs would not
+    fit in memory as a list: ~1 KB per event in Python objects)."""
     # String seeds are hashed with SHA-512 by random.Random: stable across processes
     # and Python versions, and unaffected by PYTHONHASHSEED.
     fleet_rng = random.Random(f"fleetforge:{cfg.seed}:fleet")
     delivery_rng = random.Random(f"fleetforge:{cfg.seed}:delivery")
     max_delay_positions = max(1, cfg.faults.max_delay_ticks * cfg.robots)
-    return list(
-        _apply_delivery_faults(_in_order(cfg, fleet_rng), max_delay_positions, delivery_rng)
-    )
+    return _apply_delivery_faults(_in_order(cfg, fleet_rng), max_delay_positions, delivery_rng)
 
 
 def _in_order(cfg: SimConfig, rng: random.Random) -> Iterator[tuple[Item, str | None]]:

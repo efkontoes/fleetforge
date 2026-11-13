@@ -11,6 +11,7 @@ partitioned by robot_id), which is what the sender guarantees.
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -50,7 +51,10 @@ class Expectation:
 
 
 def expected(
-    items: list[Item], received_at: datetime | None = None, transport: str = "http"
+    items: Iterable[Item],
+    received_at: datetime | None = None,
+    transport: str = "http",
+    track_event_outcomes: bool = True,
 ) -> Expectation:
     """transport="kafka": events with the missing_field fault travel as schema-bypassing
     raw JSON (see simulator.kafka_publisher) and are expected as MALFORMED_PAYLOAD."""
@@ -65,7 +69,8 @@ def expected(
     def reject(rej: Rejection, event_id, body, outcome="REJECTED"):
         exp.outcomes[(outcome, rej.reason_code.value)] += 1
         exp.rejection_rows.add((dedup_key(event_id, body), rej.reason_code.value))
-        exp.event_outcomes[(dedup_key(event_id, body), outcome, rej.reason_code.value)] += 1
+        if track_event_outcomes:
+            exp.event_outcomes[(dedup_key(event_id, body), outcome, rej.reason_code.value)] += 1
 
     for item in items:
         if isinstance(item, RegisterRobot):
@@ -106,10 +111,12 @@ def expected(
             exp.latest[ev.robot_id] = item.payload
             exp.state_versions[ev.robot_id] += 1
             exp.outcomes[("APPLIED", None)] += 1
-            exp.event_outcomes[(str(ev.event_id), "APPLIED", None)] += 1
+            if track_event_outcomes:
+                exp.event_outcomes[(str(ev.event_id), "APPLIED", None)] += 1
         elif decision is Decision.DUPLICATE:
             exp.outcomes[("DUPLICATE", None)] += 1
-            exp.event_outcomes[(str(ev.event_id), "DUPLICATE", None)] += 1
+            if track_event_outcomes:
+                exp.event_outcomes[(str(ev.event_id), "DUPLICATE", None)] += 1
         else:
             code = "STALE_SEQUENCE" if decision is Decision.STALE else "SEQUENCE_CONFLICT"
             reject(Rejection(ReasonCode(code)), ev.event_id, body, _OUTCOME[decision])
