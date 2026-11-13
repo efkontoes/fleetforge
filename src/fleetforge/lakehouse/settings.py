@@ -17,7 +17,7 @@ class LakehouseSettings(BaseSettings):
     catalog_user: str = "iceberg"
     catalog_password: str = ""
     warehouse: str = "s3://lakehouse/warehouse"
-    s3_endpoint: str = "http://minio:9000"
+    s3_endpoint: str = "http://garage:3900"
     s3_region: str = "us-east-1"
     s3_access_key: str = ""
     s3_secret_key: str = ""

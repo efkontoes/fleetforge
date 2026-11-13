@@ -64,6 +64,7 @@ markers = [
     "lakehouse: needs the Milestone 3 lakehouse stack (FLEETFORGE_LAKEHOUSE=1)",
     "lakehouse_kafka: also needs Kafka and the schema registry",
     "lakehouse_trino: needs Trino; reads the tables test_slice.py leaves behind",
+    "lakehouse_s3: needs only the object store (S3 conformance probe)",
 ]
 filterwarnings = [
     # Starlette's TestClient nudges towards httpx2; httpx is still supported and used

@@ -127,12 +127,12 @@ def test_every_pin_agrees_with_versions_py():
     for pkg in versions.SPARK_PACKAGES:
         assert pkg in spark_df
     assert versions.JAVA_IMAGE in spark_df
-    minio_df = (ROOT / "infrastructure/lakehouse/minio/Dockerfile").read_text()
-    for pin in (versions.GO_IMAGE, versions.MINIO_COMMIT, versions.MC_COMMIT):
-        assert pin in minio_df
     compose = (ROOT / "infrastructure/lakehouse/compose.yaml").read_text()
     assert f"trinodb/trino:{versions.TRINO}@sha256:" in compose
-    assert f"fleetforge-minio:{versions.MINIO_RELEASE}" in compose
+    assert f"{versions.GARAGE_IMAGE}@sha256:" in compose
+    # Garage rejects AWS SDK v2's default trailing checksums (ADR 0015).
+    assert "AWS_REQUEST_CHECKSUM_CALCULATION: WHEN_REQUIRED" in compose
+    assert compose.count("<<: *aws-sdk-checksums") == 2  # Spark (via lakehouse env) and Trino
     extra = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["optional-dependencies"]
     assert sorted(extra["lakehouse"]) == sorted(
         f"{k}=={v}" for k, v in versions.PYTHON_PINS.items()

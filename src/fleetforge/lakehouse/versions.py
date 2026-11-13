@@ -11,8 +11,9 @@ and the Trino 484 documentation; see docs/architecture/milestone-3.md):
     deferred lakehouse tests, not yet by execution.
   * Trino 484 reads Iceberg format v1/v2 (v3 experimental), supports the JDBC
     catalog on PostgreSQL and bundles its own Java 25.
-  * MinIO: upstream archived its repository and no longer publishes images. The
-    last source release is pinned and built from source (see ADR 0012).
+  * Object store: Garage v2.5.0 (ADR 0015). MinIO was archived upstream and its
+    images withdrawn; SeaweedFS 4.51 passed the same S3 probe but used ~12x the
+    memory.
 """
 
 SPARK = "4.1.4"
@@ -21,11 +22,7 @@ ICEBERG = "1.12.0"
 POSTGRES_JDBC = "42.7.14"
 TRINO = "484"
 JAVA_IMAGE = "eclipse-temurin:21.0.12.1_1-jre-noble"
-GO_IMAGE = "golang:1.24.8-bookworm"  # the toolchain MinIO's go.mod declares
-MINIO_RELEASE = "RELEASE.2025-10-15T17-29-55Z"
-MINIO_COMMIT = "9e49d5e7a648f00e26f2246f4dc28e6b07f8c84a"
-MC_RELEASE = "RELEASE.2025-08-13T08-35-41Z"
-MC_COMMIT = "7394ce0dd2a80935aded936b09fa12cbb3cb8096"
+GARAGE_IMAGE = "dxflrs/garage:v2.5.0"
 ICEBERG_FORMAT_VERSION = 2
 
 SPARK_PACKAGES = (

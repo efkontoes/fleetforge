@@ -59,6 +59,21 @@ def session(app_name: str, settings: LakehouseSettings | None = None) -> SparkSe
     return builder.getOrCreate()
 
 
+def warehouse_bucket(s: LakehouseSettings) -> str:
+    return s.warehouse.removeprefix("s3://").split("/", 1)[0]
+
+
+def object_store(s: LakehouseSettings):
+    """pyarrow S3 client with the same endpoint, credentials and path-style
+    addressing as Iceberg's S3FileIO."""
+    from pyarrow import fs
+
+    scheme, _, host = s.s3_endpoint.partition("://")
+    return fs.S3FileSystem(access_key=s.s3_access_key, secret_key=s.s3_secret_key,
+                           endpoint_override=host, scheme=scheme, region=s.s3_region,
+                           force_virtual_addressing=False)  # fmt: skip
+
+
 def ensure_tables(spark: SparkSession, tables: Iterable[Table]) -> None:
     for t in tables:
         for stmt in t.create_statements(CATALOG):

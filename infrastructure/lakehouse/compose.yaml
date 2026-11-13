@@ -5,48 +5,55 @@
 # and the memory budget of each.
 #
 #   sh scripts/make-lakehouse-env.sh                      # secrets -> .env.lakehouse
-#   make -f lakehouse.mk lake-up                          # MinIO + catalog DB
+#   make -f lakehouse.mk lake-up                          # Garage + catalog DB
 #   make -f lakehouse.mk lake-test                        # Spark tests (profile jobs)
 #   make -f lakehouse.mk lake-query                       # + Trino (profile query)
 #
-# Host ports (all 127.0.0.1, none used by Milestone 2): MinIO 9900/9901,
+# Host ports (all 127.0.0.1, none used by Milestone 2): Garage S3 9900,
 # catalog PostgreSQL 5433, Trino 8090.
 name: fleetforge-lakehouse
 
-x-s3-credentials: &s3-credentials
-  MINIO_ROOT_USER: ${LAKEHOUSE_S3_ACCESS_KEY:?run scripts/make-lakehouse-env.sh}
-  MINIO_ROOT_PASSWORD: ${LAKEHOUSE_S3_SECRET_KEY:?run scripts/make-lakehouse-env.sh}
+# AWS SDK v2 (in Iceberg's aws bundle and in Trino) adds a trailing checksum to every
+# upload by default (aws-chunked encoding). Garage rejects that as "Invalid payload
+# signature" (400): measured, see ADR 0015. Checksums only where S3 requires them.
+x-aws-sdk-checksums: &aws-sdk-checksums
+  AWS_REQUEST_CHECKSUM_CALCULATION: WHEN_REQUIRED
+  AWS_RESPONSE_CHECKSUM_VALIDATION: WHEN_REQUIRED
 
 x-lakehouse-env: &lakehouse-env
+  <<: *aws-sdk-checksums
   FLEETFORGE_LAKEHOUSE_CATALOG_JDBC_URL: jdbc:postgresql://catalog-db:5432/iceberg_catalog
   FLEETFORGE_LAKEHOUSE_CATALOG_USER: iceberg
   FLEETFORGE_LAKEHOUSE_CATALOG_PASSWORD: ${LAKEHOUSE_CATALOG_PASSWORD:?run scripts/make-lakehouse-env.sh}
-  FLEETFORGE_LAKEHOUSE_S3_ENDPOINT: http://minio:9000
+  FLEETFORGE_LAKEHOUSE_S3_ENDPOINT: http://garage:3900
   FLEETFORGE_LAKEHOUSE_S3_ACCESS_KEY: ${LAKEHOUSE_S3_ACCESS_KEY:?}
   FLEETFORGE_LAKEHOUSE_S3_SECRET_KEY: ${LAKEHOUSE_S3_SECRET_KEY:?}
   FLEETFORGE_LAKEHOUSE_DRIVER_MEMORY: 1g
 
 services:
-  minio:
-    # Upstream archived MinIO and stopped publishing images; built from the last
-    # source release, pinned by commit (ADR 0012).
-    build: {context: ./minio}
-    image: fleetforge-minio:RELEASE.2025-10-15T17-29-55Z
-    command: ["server", "/data", "--console-address", ":9001"]
-    environment: *s3-credentials
-    ports: ["127.0.0.1:9900:9000", "127.0.0.1:9901:9001"]
-    volumes: [minio-data:/data]
-    mem_limit: 384m
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9000/minio/health/live', timeout=3)"]
-      interval: 5s
-      retries: 30
+  garage:
+    # S3-compatible object store (ADR 0015): prebuilt, digest-pinned, ~45 MiB peak.
+    image: dxflrs/garage:v2.5.0@sha256:677e5b758e4425a325b811c425c026bf35a4bf42f7ddbaa773de3f4fd779a5a5
+    environment:
+      GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET:?run scripts/make-lakehouse-env.sh}
+      GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN:?run scripts/make-lakehouse-env.sh}
+    volumes:
+      - ./garage/garage.toml:/etc/garage.toml:ro
+      - garage-meta:/var/lib/garage/meta
+      - garage-data:/var/lib/garage/data
+    ports: ["127.0.0.1:9900:3900"]
+    mem_limit: 192m
 
-  minio-init:
-    image: fleetforge-minio:RELEASE.2025-10-15T17-29-55Z
-    depends_on: {minio: {condition: service_healthy}}
-    environment: *s3-credentials
-    entrypoint: ["sh", "-c", "mc alias set local http://minio:9000 \"$$MINIO_ROOT_USER\" \"$$MINIO_ROOT_PASSWORD\" && mc mb --ignore-existing local/lakehouse"]
+  garage-init:
+    # The Garage image has no shell; its admin API is configured from Python.
+    image: python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
+    depends_on: [garage]
+    environment:
+      GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN:?}
+      LAKEHOUSE_S3_ACCESS_KEY: ${LAKEHOUSE_S3_ACCESS_KEY:?}
+      LAKEHOUSE_S3_SECRET_KEY: ${LAKEHOUSE_S3_SECRET_KEY:?}
+    volumes: ["./garage/garage_init.py:/garage_init.py:ro"]
+    command: ["python", "/garage_init.py"]
     restart: "no"
 
   catalog-db:
@@ -75,12 +82,12 @@ services:
     profiles: ["jobs"]
     depends_on:
       catalog-db: {condition: service_healthy}
-      minio-init: {condition: service_completed_successfully}
+      garage-init: {condition: service_completed_successfully}
     environment:
       <<: *lakehouse-env
       FLEETFORGE_LAKEHOUSE: "1"
       PYTHONPATH: /workspace/src
-    volumes: ["../..:/workspace:ro"]
+    volumes: ["../..:/workspace:ro", "../../build/lakehouse-evidence:/evidence"]
     working_dir: /workspace
     mem_limit: 1600m
     entrypoint: ["python"]
@@ -90,8 +97,9 @@ services:
     profiles: ["query"]
     depends_on:
       catalog-db: {condition: service_healthy}
-      minio-init: {condition: service_completed_successfully}
+      garage-init: {condition: service_completed_successfully}
     environment:
+      <<: *aws-sdk-checksums
       LAKEHOUSE_CATALOG_PASSWORD: ${LAKEHOUSE_CATALOG_PASSWORD:?}
       LAKEHOUSE_S3_ACCESS_KEY: ${LAKEHOUSE_S3_ACCESS_KEY:?}
       LAKEHOUSE_S3_SECRET_KEY: ${LAKEHOUSE_S3_SECRET_KEY:?}
@@ -102,5 +110,6 @@ services:
     mem_limit: 1400m
 
 volumes:
-  minio-data:
+  garage-meta:
+  garage-data:
   catalog-data:

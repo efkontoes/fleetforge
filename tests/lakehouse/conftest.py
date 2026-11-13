@@ -1,4 +1,4 @@
-"""Lakehouse stack tests: Spark + Iceberg (JDBC catalog) + MinIO, and Trino.
+"""Lakehouse stack tests: Spark + Iceberg (JDBC catalog) + Garage (S3), and Trino.
 
 Deferred: they need Java, the Spark image and the lakehouse stack, which must not
 run beside the Milestone 2 stack on the development machine. Run them with
