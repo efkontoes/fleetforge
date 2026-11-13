@@ -196,7 +196,11 @@ services:
 
   connect:
     profiles: [cdc, full]
-    image: quay.io/debezium/connect:3.7.1.Final@sha256:05fcb3ca2160820450b83d06bedca444102f393568495feb329a75252eccee5f
+    # Tag, not digest: Debezium re-pushes 3.7.1.Final daily (~00:47 UTC) and quay.io
+    # garbage-collects the replaced manifests, so a digest pin breaks within a day
+    # (CI run 43344353785). The audit ran on sha256:05fcb3ca...ee5f. All other images
+    # here are pinned by digest.
+    image: quay.io/debezium/connect:3.7.1.Final
     environment:
       BOOTSTRAP_SERVERS: kafka:9092
       GROUP_ID: fleetforge-connect
@@ -225,7 +229,7 @@ services:
 
   connect-init:
     profiles: [cdc, full]
-    image: quay.io/debezium/connect:3.7.1.Final@sha256:05fcb3ca2160820450b83d06bedca444102f393568495feb329a75252eccee5f
+    image: quay.io/debezium/connect:3.7.1.Final
     entrypoint: ["/bin/bash", "/debezium/register-connectors.sh"]
     environment: {CONNECT_URL: "http://connect:8083"}
     volumes: [./infrastructure/debezium:/debezium:ro]
