@@ -330,8 +330,11 @@ same phases (`.github/workflows/lakehouse.yml`).
 | 2 | `make -f lakehouse.mk lake-test-trino` | Garage, catalog DB, Trino | **4 passed**, 10 s | Trino 1.0 GiB |
 | 3 | M2: `docker compose --profile core up -d --wait kafka schema-registry`; `make -f lakehouse.mk lake-test-kafka` | + M2 Kafka and registry only | **2 passed**, 118 s; test topics and subjects deleted afterwards | Kafka 564 MiB, registry 301 MiB, Spark 1.49 GiB |
 
-Not run: Milestone 2's 25 live-stack tests (`tests/stack`), which need its full
-stack; this branch changes no Milestone 2 runtime code.
+Milestone 2's 25 live-stack tests (`tests/stack`) need its full stack and were not
+run locally; on PR #2, Milestone 2's own CI ran them on this branch: 19 non-disruptive
+and 6 disruptive passed, with 148 unit and 99 integration/failure tests (run
+43524858480). The `lakehouse` workflow reproduced 61 unit, 14 Spark/S3, 4 Trino and
+2 Kafka passes on a fresh runner (run 43523627495).
 
 ### Guarantees and the tests that prove them
 
