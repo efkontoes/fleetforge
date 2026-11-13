@@ -365,7 +365,7 @@ time travel, types as documented.
 
 ## 13. What the first real run taught us
 
-Five failures, none visible to the unit tests (spec §8 has the full table).
+Six failures, none visible to the unit tests (spec §8 has the full table).
 
 * **"S3-compatible" is not "Iceberg-compatible".** A pyarrow probe passed every S3
   operation on Garage, yet every Iceberg metadata write failed with *Invalid
@@ -380,12 +380,18 @@ Five failures, none visible to the unit tests (spec §8 has the full table).
 * **The JVM heap is not the JVM's memory.** With a 768 MB heap the driver reached
   1.35 GB RSS and the container's cgroup killed it (`dmesg` showed it). Metaspace,
   direct buffers, code cache and GC threads live outside the heap, and Python
-  `mapInPandas` workers add their own memory. Measured per process: JVM 1,280 MiB,
-  Python workers 586 MiB, test driver 368 MiB. Cap every region and size the
-  container for the sum.
+  `mapInPandas` workers add their own memory, and glibc's per-core malloc arenas
+  fragment native memory outside every JVM limit. Measured per process: JVM
+  1,282 MiB, Python workers 363 MiB with one task thread (586 MiB with two), test
+  driver 321 MiB. Cap every region (`MALLOC_ARENA_MAX=2` included), size the
+  container for the measured sum, and do not trust one green run near the limit:
+  the same configuration passed once and was killed on the next run.
 * **Identifiers have more than one spelling.** Kafka topic ids printed by librdkafka
   use standard base64 (`+`, `/`); Java clients print URL-safe base64. A validator
   written from the Java form rejected the real broker's id.
 * **Your own guard can block you.** A check "no `fleetforge-*` containers running"
   also matched the lakehouse's `fleetforge-lakehouse-*` containers.
-
+* **CI is a different machine.** On the runner, the test container could not read
+  Milestone 2's secrets file because it was started inside the checkout, where CI
+  had just generated that file. Locally the file did not exist. The fix was to keep
+  the container out of the directory, not to loosen the file's permissions.

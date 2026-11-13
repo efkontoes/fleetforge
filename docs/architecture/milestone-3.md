@@ -292,7 +292,7 @@ Action vocabulary: **retry** (no commit happened; rerun is safe), **quarantine**
 | Catalog DB | PostgreSQL 17 (same digest as M2 tests), separate container | Iceberg JDBC catalog: no extra catalog service on a 3.7 GiB machine | ADR 0012 |
 | Object storage | Garage v2.5.0 (`dxflrs/garage`, digest-pinned), single node | Maintained; 5/5 S3 operations; 43 MiB peak vs SeaweedFS 500 MiB; prebuilt image | ADR 0015 (measured) |
 | AWS SDK v2 setting | `AWS_REQUEST_CHECKSUM_CALCULATION=WHEN_REQUIRED`, `AWS_RESPONSE_CHECKSUM_VALIDATION=WHEN_REQUIRED` on Spark and Trino | Garage rejects the SDK's default trailing upload checksums | Bug B1 below |
-| Spark driver | heap 768 MB; metaspace 320 MB, direct 256 MB, code cache 96 MB caps; container 1.8 GiB | Measured: unbounded off-heap got the JVM OOM-killed | Bug B5 below |
+| Spark driver | heap 768 MB; metaspace 320 MB, direct 256 MB, code cache 96 MB caps; `MALLOC_ARENA_MAX=2`; `local[1]`; container 2 GiB | Measured budget: peak 1.77 GiB | Bug B5 below |
 
 Alternatives considered (details in ADRs): Delta Lake or Hudi instead of Iceberg
 (Iceberg is engine-neutral and Trino's Iceberg support is first-class); a REST
@@ -319,16 +319,16 @@ tests (no JVM, but not the engines this milestone teaches).
 ## 8. Test execution and evidence
 
 Executed 2026-11-13 on the 3.7 GiB WSL machine with the Milestone 2 stack stopped,
-one phase at a time. JUnit XML: `docs/reviews/evidence/milestone-3/`. CI runs the
+one phase at a time, and repeated on a fresh GitHub Actions runner by the CI workflow. JUnit XML: `docs/reviews/evidence/milestone-3/`. CI runs the
 same phases (`.github/workflows/lakehouse.yml`).
 
 | Phase | Command | Running services | Result | Peak memory (measured) |
 |---|---|---|---|---|
 | unit | `.venv/bin/pytest tests/unit tests/integration tests/failure tests/lakehouse` | Testcontainers PostgreSQL | **247 passed, 20 skipped** (87 M2 unit + 61 lakehouse unit + 93 integration + 6 failure; the 20 skips are the stack tests below) | — |
 | 0 | `make -f lakehouse.mk lake-build` | — | Spark image 885 MB; Ivy resolved the 4 packages (15 jars); the JRE runs in the Python base | — |
-| 1 | `make -f lakehouse.mk lake-test` | Garage, catalog DB, Spark | **14 passed** (5 S3 conformance + 9 Spark/Iceberg), 179 s | JVM 1,280 MiB, Python workers 586 MiB, pytest 368 MiB (per-process peaks); no OOM kill |
-| 2 | `make -f lakehouse.mk lake-test-trino` | Garage, catalog DB, Trino | **4 passed**, 12 s | Trino 1.0 GiB |
-| 3 | M2: `docker compose --profile core up -d --wait kafka schema-registry`; `make -f lakehouse.mk lake-test-kafka` | + M2 Kafka and registry only | **2 passed**, 105 s; test topics and subjects deleted afterwards | Kafka 390 MiB, registry 282 MiB, Spark 1.63 GiB |
+| 1 | `make -f lakehouse.mk lake-test` | Garage, catalog DB, Spark (`local[1]`) | **14 passed** (5 S3 conformance + 9 Spark/Iceberg), 212 s | container 1.77 GiB of 2 GiB; per process: JVM 1,282 MiB, Python workers 363 MiB, pytest 321 MiB; no OOM kill |
+| 2 | `make -f lakehouse.mk lake-test-trino` | Garage, catalog DB, Trino | **4 passed**, 10 s | Trino 1.0 GiB |
+| 3 | M2: `docker compose --profile core up -d --wait kafka schema-registry`; `make -f lakehouse.mk lake-test-kafka` | + M2 Kafka and registry only | **2 passed**, 118 s; test topics and subjects deleted afterwards | Kafka 564 MiB, registry 301 MiB, Spark 1.49 GiB |
 
 Not run: Milestone 2's 25 live-stack tests (`tests/stack`), which need its full
 stack; this branch changes no Milestone 2 runtime code.
@@ -358,7 +358,8 @@ stack; this branch changes no Milestone 2 runtime code.
 | B2 | Bronze append: `PLAN_VALIDATION_FAILED_RULE_IN_BATCH` (CollapseProject) | Spark 4.1.4 optimizer: `dropDuplicates` plus Iceberg's write projection yields an unresolved plan (the same plan counts fine); isolated with four plan variants | `row_number()` window over the identity (same "first copy wins") |
 | B3 | `lake-guard` would refuse the lakehouse's own second command | It matched every container name starting `fleetforge-`, including `fleetforge-lakehouse-*` | Exclude the lakehouse project |
 | B4 | Real Kafka: `illegal topic id '0/lHs2ReR2i9LwLnxKhAcg'` | librdkafka prints topic ids in standard base64 (`+`, `/`); the check assumed the URL-safe alphabet of Java clients | Accept both alphabets; quotes and backslashes still refused; unit test with the real id |
-| B5 | `Py4JNetworkError` mid-run; kernel: `Memory cgroup out of memory: Killed process (java)` at 1.35 GB RSS | Off-heap regions (metaspace, direct buffers, code cache, GC threads) are not bounded by the heap; with a 1 GB heap the JVM plus Python workers exceeded the container limit late in a long session | Explicit off-heap caps, heap 768 MB, container 1.8 GiB; per-process breakdown measured above |
+| B5 | `Py4JNetworkError` mid-run; kernel: `Memory cgroup out of memory: Killed process (java)` at 1.35 GB RSS | Off-heap regions (metaspace, direct buffers, code cache, GC threads) are not bounded by the heap; with a 1 GB heap the JVM plus Python workers exceeded the container limit late in a long session | Off-heap caps, heap 768 MB, `MALLOC_ARENA_MAX=2` (glibc arenas fragment native memory outside every JVM limit), one Spark task thread (`local[1]`: Python workers 586 → 363 MiB), container 2 GiB. A 1 GB heap was killed again late in a long session, and so was the 768 MB heap once without the arena cap and with two threads: the margin was luck, not design, until the budget was measured |
+| B6 | CI only: `PermissionError: [Errno 13] Permission denied: '.env'` in the Kafka phase | Milestone 2's settings read `./.env`, which holds its secrets with mode 600; the Spark container (uid 10001) ran with the checkout as its working directory. Locally the Milestone 3 worktree had no `.env` | The container's working directory is its home; tests run by absolute path. The secrets file stays unreadable to the lakehouse, as it should. Reproduced and verified locally first |
 
 Concerns that did **not** materialise: pandas/Arrow conversion in `mapInPandas`,
 struct comparison in the out-of-order window, Iceberg JDBC catalog initialisation,
