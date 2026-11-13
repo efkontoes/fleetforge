@@ -20,6 +20,10 @@ TRANSIENT = {
     KafkaError._TRANSPORT,
     KafkaError._TIMED_OUT,
     KafkaError._ALL_BROKERS_DOWN,
+    # Local: a fresh client's metadata cache does not know the partition yet (seen on
+    # CI right after a PostgreSQL restart). A partition that really does not exist
+    # still fails, after the bounded retries.
+    KafkaError._UNKNOWN_PARTITION,
 }
 
 
