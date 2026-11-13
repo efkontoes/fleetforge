@@ -28,6 +28,14 @@ dev = [
     "testcontainers[postgres]>=4.7",
     "ruff==0.17.4",
 ]
+# Milestone 3 Spark jobs and lakehouse stack tests (needs Java 17/21 at runtime; see
+# docs/architecture/milestone-3.md, "Technology inventory").
+lakehouse = [
+    "pyspark==4.1.4",
+    "pandas==2.3.3",
+    "pyarrow==25.0.1",
+    "trino==0.340.0",
+]
 
 [project.scripts]
 fleet-sim = "fleetforge.simulator.cli:main"
@@ -53,6 +61,9 @@ markers = [
     "integration: needs a real PostgreSQL instance",
     "stack: needs the running Compose stack (FLEETFORGE_STACK=1)",
     "disruptive: stops or restarts stack services (run last, one at a time)",
+    "lakehouse: needs the Milestone 3 lakehouse stack (FLEETFORGE_LAKEHOUSE=1)",
+    "lakehouse_kafka: also needs Kafka and the schema registry",
+    "lakehouse_trino: needs Trino; reads the tables test_slice.py leaves behind",
 ]
 filterwarnings = [
     # Starlette's TestClient nudges towards httpx2; httpx is still supported and used
@@ -72,4 +83,5 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 "scripts/build_dashboard.py" = ["E501"]
 # Stack tests embed SQL and multi-service assertions; readability beats wrapping.
 "tests/stack/*" = ["E501"]
+"tests/lakehouse/*" = ["E501"]
 "benchmarks/*" = ["E501"]

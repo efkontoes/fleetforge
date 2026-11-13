@@ -1,0 +1,106 @@
+# Milestone 3 lakehouse stack. A SEPARATE Compose project (own network, volumes and
+# container names) so it can never touch the Milestone 2 stack. On the 3.7 GiB
+# development machine it must NOT run at the same time as the Milestone 2 stack:
+# docs/architecture/milestone-3.md, "Deferred execution", gives the order of phases
+# and the memory budget of each.
+#
+#   sh scripts/make-lakehouse-env.sh                      # secrets -> .env.lakehouse
+#   make -f lakehouse.mk lake-up                          # MinIO + catalog DB
+#   make -f lakehouse.mk lake-test                        # Spark tests (profile jobs)
+#   make -f lakehouse.mk lake-query                       # + Trino (profile query)
+#
+# Host ports (all 127.0.0.1, none used by Milestone 2): MinIO 9900/9901,
+# catalog PostgreSQL 5433, Trino 8090.
+name: fleetforge-lakehouse
+
+x-s3-credentials: &s3-credentials
+  MINIO_ROOT_USER: ${LAKEHOUSE_S3_ACCESS_KEY:?run scripts/make-lakehouse-env.sh}
+  MINIO_ROOT_PASSWORD: ${LAKEHOUSE_S3_SECRET_KEY:?run scripts/make-lakehouse-env.sh}
+
+x-lakehouse-env: &lakehouse-env
+  FLEETFORGE_LAKEHOUSE_CATALOG_JDBC_URL: jdbc:postgresql://catalog-db:5432/iceberg_catalog
+  FLEETFORGE_LAKEHOUSE_CATALOG_USER: iceberg
+  FLEETFORGE_LAKEHOUSE_CATALOG_PASSWORD: ${LAKEHOUSE_CATALOG_PASSWORD:?run scripts/make-lakehouse-env.sh}
+  FLEETFORGE_LAKEHOUSE_S3_ENDPOINT: http://minio:9000
+  FLEETFORGE_LAKEHOUSE_S3_ACCESS_KEY: ${LAKEHOUSE_S3_ACCESS_KEY:?}
+  FLEETFORGE_LAKEHOUSE_S3_SECRET_KEY: ${LAKEHOUSE_S3_SECRET_KEY:?}
+  FLEETFORGE_LAKEHOUSE_DRIVER_MEMORY: 1g
+
+services:
+  minio:
+    # Upstream archived MinIO and stopped publishing images; built from the last
+    # source release, pinned by commit (ADR 0012).
+    build: {context: ./minio}
+    image: fleetforge-minio:RELEASE.2025-10-15T17-29-55Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment: *s3-credentials
+    ports: ["127.0.0.1:9900:9000", "127.0.0.1:9901:9001"]
+    volumes: [minio-data:/data]
+    mem_limit: 384m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9000/minio/health/live', timeout=3)"]
+      interval: 5s
+      retries: 30
+
+  minio-init:
+    image: fleetforge-minio:RELEASE.2025-10-15T17-29-55Z
+    depends_on: {minio: {condition: service_healthy}}
+    environment: *s3-credentials
+    entrypoint: ["sh", "-c", "mc alias set local http://minio:9000 \"$$MINIO_ROOT_USER\" \"$$MINIO_ROOT_PASSWORD\" && mc mb --ignore-existing local/lakehouse"]
+    restart: "no"
+
+  catalog-db:
+    # Iceberg JDBC catalog: one row per table, holding its current metadata.json
+    # location. A commit is a conditional UPDATE of that row (optimistic concurrency).
+    image: postgres:17@sha256:ff87138949ad9a46f32ff23bd6852b52ce024a13dffe9b4087be98292cdd3b4f
+    environment:
+      POSTGRES_USER: iceberg
+      POSTGRES_PASSWORD: ${LAKEHOUSE_CATALOG_PASSWORD:?}
+      POSTGRES_DB: iceberg_catalog
+    command: ["postgres", "-c", "shared_buffers=32MB", "-c", "max_connections=40"]
+    volumes:
+      - catalog-data:/var/lib/postgresql/data
+      - ./catalog-db/init.sql:/docker-entrypoint-initdb.d/10-test-catalog.sql:ro
+    ports: ["127.0.0.1:5433:5432"]
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U iceberg -d iceberg_catalog"]
+      interval: 3s
+      retries: 30
+
+  spark:
+    # Jobs and lakehouse tests: Spark local mode in one JVM (driver = executor).
+    build: {context: ../.., dockerfile: infrastructure/lakehouse/spark/Dockerfile}
+    image: fleetforge-lakehouse-spark:dev
+    profiles: ["jobs"]
+    depends_on:
+      catalog-db: {condition: service_healthy}
+      minio-init: {condition: service_completed_successfully}
+    environment:
+      <<: *lakehouse-env
+      FLEETFORGE_LAKEHOUSE: "1"
+      PYTHONPATH: /workspace/src
+    volumes: ["../..:/workspace:ro"]
+    working_dir: /workspace
+    mem_limit: 1600m
+    entrypoint: ["python"]
+
+  trino:
+    image: trinodb/trino:484@sha256:2704eb53935af5e582d63d6033e9bf99d20c325e9b0e30b1016ef59a4773979f
+    profiles: ["query"]
+    depends_on:
+      catalog-db: {condition: service_healthy}
+      minio-init: {condition: service_completed_successfully}
+    environment:
+      LAKEHOUSE_CATALOG_PASSWORD: ${LAKEHOUSE_CATALOG_PASSWORD:?}
+      LAKEHOUSE_S3_ACCESS_KEY: ${LAKEHOUSE_S3_ACCESS_KEY:?}
+      LAKEHOUSE_S3_SECRET_KEY: ${LAKEHOUSE_S3_SECRET_KEY:?}
+    # Replaces the image's sample catalogs; the image's own jvm.config (heap as a
+    # percentage of the container limit) is kept, so the limit sizes the heap.
+    volumes: ["./trino/catalog:/etc/trino/catalog:ro"]
+    ports: ["127.0.0.1:8090:8080"]
+    mem_limit: 1400m
+
+volumes:
+  minio-data:
+  catalog-data:
