@@ -1,0 +1,83 @@
+{
+  "started_at": "2026-11-13T00:54:58.917975+00:00",
+  "command": "drain",
+  "args": {
+    "cmd": "drain",
+    "robots": 300,
+    "ticks": 75,
+    "seed": 531298,
+    "label": "",
+    "producers": 2,
+    "consumers": 3,
+    "modes": [
+      "set:500"
+    ]
+  },
+  "environment": {
+    "platform": "Linux-5.15.146.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+    "cpu": "Intel(R) Core(TM) i5-10210U CPU @ 1.60GHz",
+    "vcpus": 8,
+    "wsl_mem_total": "3901516 kB",
+    "swap_total": "1048576 kB",
+    "storage": "WSL2 ext4 virtual disk (Docker named volumes)",
+    "postgres": "postgres (PostgreSQL) 17.11 (Debian 17.11-1.pgdg13+2)",
+    "kafka_image": "apache/kafka:4.3.1 (KRaft, 1 broker, RF=1)",
+    "python": "3.12.3",
+    "docker_limits": "postgres 768m, kafka 768m (heap 384m), registry 448m, api 512m"
+  },
+  "result": {
+    "experiment": "backlog drain",
+    "runs": [
+      {
+        "mode": "set",
+        "batch_size": 500,
+        "consumers": 3,
+        "events": 22722,
+        "produce": {
+          "producer_processes": 2,
+          "elapsed_s": 1.23,
+          "throughput_eps": 18452.7,
+          "ack_latency_ms": {
+            "p50": 11.36,
+            "p95": 20.46,
+            "p99": 21.5,
+            "n": 22722
+          },
+          "producer_cpu_s": 1.89
+        },
+        "drain": {
+          "records": 22722,
+          "seconds": 1.93,
+          "throughput_eps": 11770.9,
+          "avg_batch": 463.7,
+          "transactions": 49,
+          "commit_latency_ms": {
+            "p50": 4.64,
+            "p95": 11.17,
+            "p99": 491.6,
+            "n": 49
+          },
+          "projector_cpu_s": 3.84,
+          "projector_cpu_cores_avg": 1.99,
+          "projector_max_rss_mb": 111.0,
+          "retries": 0
+        },
+        "postgres": {
+          "transactions": 110,
+          "tx_per_s": 57.0,
+          "wal_bytes": 8323992,
+          "wal_bytes_per_event": 366.3,
+          "wal_records_per_event": 0.8,
+          "full_page_images_per_event": 0.046
+        },
+        "containers_during_drain": {
+          "fleetforge-api-1": "40.68% 154.1MiB / 512MiB",
+          "fleetforge-kafka-1": "18.35% 394MiB / 768MiB",
+          "fleetforge-schema-registry-1": "9.48% 229.4MiB / 448MiB",
+          "fleetforge-postgres-1": "0.05% 397.3MiB / 768MiB"
+        },
+        "matches_oracle": true
+      }
+    ]
+  }
+}

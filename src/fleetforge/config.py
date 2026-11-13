@@ -15,6 +15,24 @@ class Settings(BaseSettings):
     # A latest state older than this is reported as stale by the read API.
     state_freshness_s: float = 10.0
     log_level: str = "INFO"
+    # When false the legacy HTTP telemetry endpoint returns 410; telemetry must go
+    # through Kafka. Kept on by default for Milestone 1 compatibility and benchmark A.
+    http_telemetry_enabled: bool = True
+
+    # ---- Kafka / schema registry (Milestone 2)
+    kafka_bootstrap: str = "localhost:29092"
+    schema_registry_url: str = "http://localhost:8081/apis/ccompat/v7"
+    telemetry_topic: str = "telemetry.raw.v1"
+    mission_events_topic: str = "fleet.mission-events.v1"
+
+    # ---- projector
+    projector_group: str = "telemetry-projector"
+    projector_mode: str = "set"  # set | loop | per_event  (see projector/processor.py)
+    projector_batch_size: int = 500
+    projector_flush_interval_s: float = 0.2
+    projector_metrics_port: int = 9101
+    projector_max_retry_backoff_s: float = 10.0
+    consumer_rejoin_timeout_s: float = 120.0
 
 
 @lru_cache

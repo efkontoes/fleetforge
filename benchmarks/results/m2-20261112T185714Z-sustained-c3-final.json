@@ -1,0 +1,198 @@
+{
+  "started_at": "2026-11-12T18:51:11.719079+00:00",
+  "command": "sustained",
+  "args": {
+    "cmd": "sustained",
+    "robots": 500,
+    "ticks": 75,
+    "seed": 509471,
+    "label": "c3-final",
+    "producers": 2,
+    "consumers": 3,
+    "rates": [
+      2000,
+      5000,
+      7000,
+      9000
+    ],
+    "mode": "set:500",
+    "seconds": 30
+  },
+  "environment": {
+    "platform": "Linux-5.15.146.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+    "cpu": "Intel(R) Core(TM) i5-10210U CPU @ 1.60GHz",
+    "vcpus": 8,
+    "wsl_mem_total": "3901516 kB",
+    "swap_total": "1048576 kB",
+    "storage": "WSL2 ext4 virtual disk (Docker named volumes)",
+    "postgres": "postgres (PostgreSQL) 17.11 (Debian 17.11-1.pgdg13+2)",
+    "kafka_image": "apache/kafka:4.3.1 (KRaft, 1 broker, RF=1)",
+    "python": "3.12.3",
+    "docker_limits": "postgres 768m, kafka 768m (heap 384m), registry 448m, api 512m"
+  },
+  "result": {
+    "experiment": "sustained rate",
+    "runs": [
+      {
+        "target_rate_eps": 2000,
+        "events": 60602,
+        "mode": "set",
+        "batch_size": 500,
+        "consumers": 3,
+        "producer_processes": 2,
+        "achieved_produce_eps": 1937.8,
+        "producer_active_s": 31.27,
+        "producer_ack_latency_ms": {
+          "p50": 13.01,
+          "p95": 22.09,
+          "p99": 22.89,
+          "n": 60602
+        },
+        "processed": 60602,
+        "event_to_state_ms": {
+          "p50": 92.72,
+          "p95": 150.79,
+          "p99": 185.09,
+          "n": 54542
+        },
+        "max_event_to_state_s": 0.26,
+        "projector_cpu_cores_avg": 0.95,
+        "postgres": {
+          "transactions": 2377,
+          "tx_per_s": 76.0,
+          "wal_bytes": 19368952,
+          "wal_bytes_per_event": 319.6
+        },
+        "containers": {
+          "fleetforge-api-1": "2.38% 277.4MiB / 512MiB",
+          "fleetforge-schema-registry-1": "1.00% 235MiB / 448MiB",
+          "fleetforge-postgres-1": "0.31% 144.6MiB / 768MiB",
+          "fleetforge-kafka-1": "9.89% 379.4MiB / 768MiB"
+        },
+        "kept_up": true,
+        "matches_oracle": true,
+        "tail_drain_s": 0.03
+      },
+      {
+        "target_rate_eps": 5000,
+        "events": 151473,
+        "mode": "set",
+        "batch_size": 500,
+        "consumers": 3,
+        "producer_processes": 2,
+        "achieved_produce_eps": 4752.9,
+        "producer_active_s": 31.87,
+        "producer_ack_latency_ms": {
+          "p50": 12.56,
+          "p95": 59.98,
+          "p99": 1820.15,
+          "n": 151473
+        },
+        "processed": 151473,
+        "event_to_state_ms": {
+          "p50": 144.2,
+          "p95": 941.53,
+          "p99": 2104.56,
+          "n": 136326
+        },
+        "max_event_to_state_s": 2.53,
+        "projector_cpu_cores_avg": 1.41,
+        "postgres": {
+          "transactions": 1681,
+          "tx_per_s": 52.7,
+          "wal_bytes": 38712552,
+          "wal_bytes_per_event": 255.6
+        },
+        "containers": {
+          "fleetforge-api-1": "2.40% 277.9MiB / 512MiB",
+          "fleetforge-schema-registry-1": "0.97% 235.6MiB / 448MiB",
+          "fleetforge-postgres-1": "29.17% 155.9MiB / 768MiB",
+          "fleetforge-kafka-1": "7.68% 397.2MiB / 768MiB"
+        },
+        "kept_up": false,
+        "matches_oracle": true,
+        "tail_drain_s": 0.01
+      },
+      {
+        "target_rate_eps": 7000,
+        "events": 212105,
+        "mode": "set",
+        "batch_size": 500,
+        "consumers": 3,
+        "producer_processes": 2,
+        "achieved_produce_eps": 6912.0,
+        "producer_active_s": 30.69,
+        "producer_ack_latency_ms": {
+          "p50": 12.15,
+          "p95": 21.63,
+          "p99": 99.88,
+          "n": 212105
+        },
+        "processed": 212105,
+        "event_to_state_ms": {
+          "p50": 199.21,
+          "p95": 543.62,
+          "p99": 768.13,
+          "n": 190895
+        },
+        "max_event_to_state_s": 0.92,
+        "projector_cpu_cores_avg": 1.87,
+        "postgres": {
+          "transactions": 1405,
+          "tx_per_s": 45.8,
+          "wal_bytes": 41613296,
+          "wal_bytes_per_event": 196.2
+        },
+        "containers": {
+          "fleetforge-api-1": "2.55% 255.5MiB / 512MiB",
+          "fleetforge-schema-registry-1": "1.70% 234.5MiB / 448MiB",
+          "fleetforge-postgres-1": "0.32% 158.2MiB / 768MiB",
+          "fleetforge-kafka-1": "9.27% 392.1MiB / 768MiB"
+        },
+        "kept_up": true,
+        "matches_oracle": true,
+        "tail_drain_s": 0.02
+      },
+      {
+        "target_rate_eps": 9000,
+        "events": 272649,
+        "mode": "set",
+        "batch_size": 500,
+        "consumers": 3,
+        "producer_processes": 2,
+        "achieved_produce_eps": 8818.3,
+        "producer_active_s": 30.92,
+        "producer_ack_latency_ms": {
+          "p50": 12.19,
+          "p95": 21.62,
+          "p99": 97.48,
+          "n": 272649
+        },
+        "processed": 272649,
+        "event_to_state_ms": {
+          "p50": 388.66,
+          "p95": 875.53,
+          "p99": 1284.7,
+          "n": 245385
+        },
+        "max_event_to_state_s": 1.67,
+        "projector_cpu_cores_avg": 2.39,
+        "postgres": {
+          "transactions": 1311,
+          "tx_per_s": 42.4,
+          "wal_bytes": 37971680,
+          "wal_bytes_per_event": 139.3
+        },
+        "containers": {
+          "fleetforge-api-1": "2.79% 237.7MiB / 512MiB",
+          "fleetforge-schema-registry-1": "0.89% 229.9MiB / 448MiB",
+          "fleetforge-postgres-1": "0.33% 164.8MiB / 768MiB",
+          "fleetforge-kafka-1": "7.94% 387.3MiB / 768MiB"
+        },
+        "kept_up": true,
+        "matches_oracle": true,
+        "tail_drain_s": 1.37
+      }
+    ]
+  }
+}

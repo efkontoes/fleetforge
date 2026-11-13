@@ -25,6 +25,7 @@ from fleetforge.contracts.telemetry import TelemetryEventV1
 
 class ReasonCode(StrEnum):
     MALFORMED_JSON = "MALFORMED_JSON"
+    MALFORMED_PAYLOAD = "MALFORMED_PAYLOAD"  # Kafka value is not decodable Avro
     MISSING_FIELD = "MISSING_FIELD"
     INVALID_FIELD = "INVALID_FIELD"
     UNSUPPORTED_SCHEMA_VERSION = "UNSUPPORTED_SCHEMA_VERSION"
@@ -32,6 +33,9 @@ class ReasonCode(StrEnum):
     OBSERVED_AT_IN_FUTURE = "OBSERVED_AT_IN_FUTURE"
     UNKNOWN_ROBOT = "UNKNOWN_ROBOT"
     UNKNOWN_BOOT = "UNKNOWN_BOOT"
+    BOOT_NUMBER_MISMATCH = "BOOT_NUMBER_MISMATCH"  # event's boot_number != registry
+    UNKNOWN_FIRMWARE = "UNKNOWN_FIRMWARE"  # no firmware contract for (model, version)
+    DB_CONSTRAINT_VIOLATION = "DB_CONSTRAINT_VIOLATION"  # passed validation, DB refused
     STALE_SEQUENCE = "STALE_SEQUENCE"
     SEQUENCE_CONFLICT = "SEQUENCE_CONFLICT"
 

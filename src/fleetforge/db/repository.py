@@ -15,7 +15,8 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import bindparam
 
 from fleetforge.contracts.telemetry import TelemetryEventV1
-from fleetforge.domain.telemetry import OrderingKey, StoredPosition
+from fleetforge.domain.errors import category_of, initial_status, retry_eligible
+from fleetforge.domain.telemetry import OrderingKey, ReasonCode, StoredPosition
 
 # ------------------------------------------------------------------ robots & boots
 
@@ -194,8 +195,12 @@ def get_robot_state(conn: Connection, robot_id: UUID) -> RowMapping | None:
 
 _INSERT_REJECTION = text("""
     INSERT INTO fleet.telemetry_rejections
-        (dedup_key, event_id, robot_id, reason_code, errors, payload, received_at)
-    VALUES (:dedup_key, :event_id, :robot_id, :reason_code, :errors, :payload, :received_at)
+        (dedup_key, event_id, robot_id, reason_code, errors, payload, received_at,
+         error_category, retry_eligible, status, source, source_topic, source_partition,
+         source_offset, consumer_version, payload_bytes)
+    VALUES (:dedup_key, :event_id, :robot_id, :reason_code, :errors, :payload, :received_at,
+            :error_category, :retry_eligible, :status, :source, :source_topic,
+            :source_partition, :source_offset, :consumer_version, :payload_bytes)
     ON CONFLICT (dedup_key, reason_code) DO NOTHING
 """).bindparams(bindparam("errors", type_=JSONB), bindparam("payload", type_=JSONB))
 
@@ -210,11 +215,28 @@ def record_rejection(
     errors: list[dict[str, Any]],
     payload: Any,
     received_at: datetime,
+    source: str = "http",
+    source_topic: str | None = None,
+    source_partition: int | None = None,
+    source_offset: int | None = None,
+    consumer_version: str | None = None,
+    payload_bytes: bytes | None = None,
 ) -> bool:
-    """Idempotent: returns False if this (event, reason) was already recorded."""
+    """Idempotent: returns False if this (event, reason) was already recorded.
+    Category, retry eligibility and initial status follow the error taxonomy."""
+    code = ReasonCode(reason_code)
     result = conn.execute(
         _INSERT_REJECTION,
         {
+            "error_category": category_of(code).value,
+            "retry_eligible": retry_eligible(code),
+            "status": initial_status(code),
+            "source": source,
+            "source_topic": source_topic,
+            "source_partition": source_partition,
+            "source_offset": source_offset,
+            "consumer_version": consumer_version,
+            "payload_bytes": payload_bytes,
             "dedup_key": dedup_key,
             "event_id": event_id,
             "robot_id": robot_id,

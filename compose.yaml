@@ -1,69 +1,306 @@
-# Milestone 1 stack.
-#   docker compose up -d                 -> PostgreSQL only (run the API/tests from the host)
-#   docker compose --profile app up -d   -> PostgreSQL + migrations + Fleet API
-# Later milestones add profiles (streaming, lakehouse, monitoring) so the whole
-# stack never has to run at once on a small machine.
+# FleetForge local stack (Milestone 2).
+#
+# Profiles keep the default footprint small. This laptop gives WSL ~3.7 GiB,
+# so every JVM has an explicit heap and every container a memory limit.
+#
+#   docker compose up -d                                  PostgreSQL only
+#   docker compose --profile core up -d                   + Kafka, schema registry, API
+#   docker compose --profile processing up -d             + telemetry projector
+#   docker compose --profile cdc up -d                    + Debezium (Kafka Connect), mission consumer
+#   docker compose --profile observability up -d          + Prometheus, Grafana, exporters
+#   docker compose --profile full up -d                   everything
+#
+# Secrets come from .env (git-ignored; `make env` generates one). `${VAR:?}` makes a
+# missing secret a startup error instead of a silent default.
+# Host ports are bound to 127.0.0.1 only: nothing is reachable from the LAN.
 
 name: fleetforge
 
-x-db-env: &db-env
-  FLEETFORGE_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-fleetforge}:${POSTGRES_PASSWORD:-fleetforge}@postgres:5432/${POSTGRES_DB:-fleetforge}
+x-core-profiles: &core-profiles [core, processing, cdc, observability, full]
+x-app-image: &app-image fleetforge-app:dev
+x-owner-db: &owner-db postgresql+psycopg://${POSTGRES_USER:-fleetforge}:${POSTGRES_PASSWORD:?run make env}@postgres:5432/fleetforge
+x-kafka-env: &kafka-env
+  FLEETFORGE_KAFKA_BOOTSTRAP: kafka:9092
+  FLEETFORGE_SCHEMA_REGISTRY_URL: http://schema-registry:8080/apis/ccompat/v7
 
 services:
   postgres:
+    restart: unless-stopped
     image: postgres:17@sha256:ff87138949ad9a46f32ff23bd6852b52ce024a13dffe9b4087be98292cdd3b4f
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-fleetforge}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fleetforge}
-      POSTGRES_DB: ${POSTGRES_DB:-fleetforge}
-    # wal_level=logical now, so Milestone 2 (Debezium) does not need a reconfiguration.
-    command: ["postgres", "-c", "wal_level=logical", "-c", "max_connections=200"]
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run make env}
+      POSTGRES_DB: fleetforge
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_connections=200
+      - -c
+      - max_replication_slots=4
+      - -c
+      - max_wal_senders=4
+      # A slot whose consumer disappears must not fill the disk: cap retained WAL.
+      # Exceeding it invalidates the slot (CDC must then re-snapshot): an explicit,
+      # alertable failure instead of an outage of the whole database.
+      - -c
+      - max_slot_wal_keep_size=2GB
+    ports: ["127.0.0.1:${POSTGRES_PORT:-5432}:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
-      interval: 2s
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d fleetforge"]
+      interval: 5s
       timeout: 3s
       retries: 30
-    mem_limit: 1g
+    mem_limit: 768m
 
   migrate:
-    profiles: ["app"]
+    profiles: *core-profiles
     build: .
-    image: fleetforge-api:dev
-    command: ["alembic", "upgrade", "head"]
-    environment: *db-env
+    image: *app-image
+    command: ["sh", "-c", "alembic upgrade head && python -m fleetforge.ops.provision"]
+    env_file: [.env]
+    environment:
+      FLEETFORGE_DATABASE_URL: *owner-db
     depends_on:
-      postgres:
-        condition: service_healthy
+      postgres: {condition: service_healthy}
+
+  kafka:
+    restart: unless-stopped
+    profiles: *core-profiles
+    image: apache/kafka:4.3.1@sha256:77e3df9054047a88b520d0cc46e16696d3b22022e1d580aeccd2632df6532837
+    environment:
+      CLUSTER_ID: fleetforge-local-kraft-01
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENERS: INTERNAL://:9092,CONTROLLER://:9093,EXTERNAL://:29092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      # Single broker: replication factor 1 everywhere. NOT highly available.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_MESSAGE_MAX_BYTES: 1048576
+      KAFKA_HEAP_OPTS: -Xmx384m -Xms384m
+      # G1, not the Serial GC the JVM picks for small containers (multi-second pauses)
+      KAFKA_JVM_PERFORMANCE_OPTS: >-
+        -server -XX:+UseG1GC -XX:MaxGCPauseMillis=20 -XX:InitiatingHeapOccupancyPercent=35
+        -XX:+ExplicitGCInvokesConcurrent -Djava.awt.headless=true
+    ports: ["127.0.0.1:29092:29092"]
+    volumes: [kafkadata:/var/lib/kafka/data]
+    healthcheck:
+      # Port probe, not a JVM CLI: a JVM-based check every few seconds costs real CPU.
+      test: ["CMD-SHELL", "nc -z localhost 9092"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    mem_limit: 768m
+    # never swap the broker heap
+    memswap_limit: 768m
+
+  kafka-init:
+    profiles: *core-profiles
+    image: apache/kafka:4.3.1@sha256:77e3df9054047a88b520d0cc46e16696d3b22022e1d580aeccd2632df6532837
+    entrypoint: ["/bin/bash", "/scripts/create-topics.sh"]
+    volumes: [./infrastructure/kafka:/scripts:ro]
+    depends_on:
+      kafka: {condition: service_healthy}
+
+  schema-registry:
+    restart: unless-stopped
+    profiles: *core-profiles
+    image: quay.io/apicurio/apicurio-registry:3.3.4@sha256:3ee4423c0f212c364d9525f7ab22ae1a009f610f3e6b8fc2cdba8b2ae68de460
+    environment:
+      # KafkaSQL storage: schemas live in a compacted Kafka topic, i.e. in the same
+      # failure domain as the messages that embed their ids. (First version used the
+      # operational PostgreSQL; a database outage then also blocked producers and
+      # could make consumers misread valid records. Found by the DB-restart test.)
+      APICURIO_STORAGE_KIND: kafkasql
+      APICURIO_KAFKASQL_BOOTSTRAP_SERVERS: kafka:9092
+      APICURIO_KAFKASQL_TOPIC: _schemas_apicurio
+      JAVA_OPTS_APPEND: -Xmx192m -Xms64m
+    ports: ["127.0.0.1:8081:8080"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/health/ready >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 40
+    depends_on:
+      kafka: {condition: service_healthy}
+    mem_limit: 448m
+
+  schema-init:
+    profiles: *core-profiles
+    image: *app-image
+    command: ["fleet-schemas", "register", "--revision", "1"]
+    environment: *kafka-env
+    depends_on:
+      schema-registry: {condition: service_healthy}
 
   api:
-    profiles: ["app"]
-    image: fleetforge-api:dev
+    restart: unless-stopped
+    profiles: *core-profiles
+    image: *app-image
+    command:
+      - sh
+      - -c
+      - rm -rf "$$PROMETHEUS_MULTIPROC_DIR"/* && exec uvicorn fleetforge.api.app:app_factory --factory --host 0.0.0.0 --port 8000 --no-access-log
     environment:
-      <<: *db-env
-      # Uvicorn reads its process count from WEB_CONCURRENCY. One Python process is
-      # GIL-bound (measured: ~1.5 cores busy, PostgreSQL ~20%); see benchmarks/README.md.
-      WEB_CONCURRENCY: "${API_PROCESSES:-4}"
-      # Per process: total connections = processes x (pool + overflow) = 4 x 15 = 60.
+      FLEETFORGE_DATABASE_URL: postgresql+psycopg://fleetforge_app:${FLEETFORGE_APP_DB_PASSWORD:?run make env}@postgres:5432/fleetforge
+      WEB_CONCURRENCY: "${API_PROCESSES:-2}"
       FLEETFORGE_DB_POOL_SIZE: "10"
       FLEETFORGE_DB_MAX_OVERFLOW: "5"
-    ports:
-      - "${API_PORT:-8000}:8000"
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
+      # Each uvicorn process writes its metrics here; /metrics aggregates them, so
+      # totals are global instead of "whichever process answered the scrape".
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus
+    tmpfs: [/tmp/prometheus]
+    ports: ["127.0.0.1:${API_PORT:-8000}:8000"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz')"]
-      # Each check starts a Python interpreter (~0.25 s CPU), so keep it infrequent.
       interval: 15s
       start_interval: 1s
       start_period: 30s
       timeout: 3s
       retries: 5
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    mem_limit: 512m
+
+  projector:
+    restart: unless-stopped
+    profiles: [processing, full]
+    image: *app-image
+    command: ["fleet-projector"]
+    environment:
+      <<: *kafka-env
+      FLEETFORGE_DATABASE_URL: postgresql+psycopg://fleetforge_projector:${FLEETFORGE_PROJECTOR_DB_PASSWORD:?run make env}@postgres:5432/fleetforge
+      FLEETFORGE_PROJECTOR_MODE: ${PROJECTOR_MODE:-set}
+      FLEETFORGE_PROJECTOR_BATCH_SIZE: ${PROJECTOR_BATCH_SIZE:-500}
+      FLEETFORGE_DB_POOL_SIZE: "2"
+      FLEETFORGE_DB_MAX_OVERFLOW: "0"
+    deploy:
+      replicas: ${PROJECTOR_REPLICAS:-1}
+    depends_on:
+      kafka-init: {condition: service_completed_successfully}
+      schema-init: {condition: service_completed_successfully}
+    mem_limit: 256m
+
+  connect:
+    restart: unless-stopped
+    profiles: [cdc, full]
+    # tag, not digest: upstream re-pushes this tag daily and old digests disappear
+    image: quay.io/debezium/connect:3.7.1.Final
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: fleetforge-connect
+      CONFIG_STORAGE_TOPIC: _connect_configs
+      OFFSET_STORAGE_TOPIC: _connect_offsets
+      STATUS_STORAGE_TOPIC: _connect_status
+      CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      STATUS_STORAGE_REPLICATION_FACTOR: 1
+      KAFKA_HEAP_OPTS: -Xmx384m -Xms128m
+      # Connector configs reference ${env:CDC_DB_PASSWORD}; the secret never enters
+      # the connector JSON stored in Kafka or in this repository.
+      CONNECT_CONFIG_PROVIDERS: env
+      CONNECT_CONFIG_PROVIDERS_ENV_CLASS: org.apache.kafka.common.config.provider.EnvVarConfigProvider
+      CDC_DB_PASSWORD: ${FLEETFORGE_CDC_DB_PASSWORD:?run make env}
+    ports: ["127.0.0.1:8083:8083"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8083/ >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+    depends_on:
+      kafka-init: {condition: service_completed_successfully}
+      migrate: {condition: service_completed_successfully}
     mem_limit: 768m
+
+  connect-init:
+    profiles: [cdc, full]
+    image: quay.io/debezium/connect:3.7.1.Final
+    entrypoint: ["/bin/bash", "/debezium/register-connectors.sh"]
+    environment: {CONNECT_URL: "http://connect:8083"}
+    volumes: [./infrastructure/debezium:/debezium:ro]
+    depends_on:
+      connect: {condition: service_healthy}
+
+  mission-consumer:
+    restart: unless-stopped
+    profiles: [cdc, full]
+    image: *app-image
+    command: ["fleet-mission-consumer"]
+    environment:
+      <<: *kafka-env
+      FLEETFORGE_DATABASE_URL: postgresql+psycopg://fleetforge_mission_consumer:${FLEETFORGE_MISSION_CONSUMER_DB_PASSWORD:?run make env}@postgres:5432/fleetforge
+      FLEETFORGE_DB_POOL_SIZE: "2"
+      FLEETFORGE_DB_MAX_OVERFLOW: "0"
+    depends_on:
+      kafka-init: {condition: service_completed_successfully}
+    mem_limit: 192m
+
+  kafka-exporter:
+    restart: unless-stopped
+    profiles: [observability, full]
+    image: danielqsj/kafka-exporter:v1.9.0@sha256:4150e46b2e9697ac30e4be8de03ec1704b4bdc7037577b83b8d35a32be298c16
+    command: ["--kafka.server=kafka:9092", "--kafka.version=3.9.0"]
+    depends_on:
+      kafka: {condition: service_healthy}
+    mem_limit: 64m
+
+  ops-exporter:
+    restart: unless-stopped
+    profiles: [observability, full]
+    image: *app-image
+    command: ["fleet-ops-exporter"]
+    environment:
+      FLEETFORGE_DATABASE_URL: postgresql+psycopg://fleetforge_readonly:${FLEETFORGE_READONLY_DB_PASSWORD:?run make env}@postgres:5432/fleetforge
+      CONNECT_URL: http://connect:8083
+      FLEETFORGE_DB_POOL_SIZE: "1"
+      FLEETFORGE_DB_MAX_OVERFLOW: "0"
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    mem_limit: 128m
+
+  prometheus:
+    restart: unless-stopped
+    profiles: [observability, full]
+    image: prom/prometheus:v3.5.0@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=3d
+      - --storage.tsdb.path=/prometheus
+    volumes:
+      - ./infrastructure/prometheus:/etc/prometheus:ro
+      - promdata:/prometheus
+    ports: ["127.0.0.1:9090:9090"]
+    mem_limit: 256m
+
+  grafana:
+    restart: unless-stopped
+    profiles: [observability, full]
+    image: grafana/grafana:12.2.0@sha256:74144189b38447facf737dfd0f3906e42e0776212bf575dc3334c3609183adf7
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?run make env}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - ./infrastructure/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infrastructure/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["127.0.0.1:3000:3000"]
+    mem_limit: 192m
 
 volumes:
   pgdata:
+  kafkadata:
+  promdata:
