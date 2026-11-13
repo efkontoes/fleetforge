@@ -30,6 +30,7 @@ import hashlib
 import io
 import json
 import math
+import re
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
@@ -323,20 +324,58 @@ def build_id(bronze_snapshot_id: int, reference_fingerprint: str) -> str:
     return hashlib.sha256(material.encode()).hexdigest()[:24]
 
 
-# Set-level rejection details, byte-identical in the Spark job (string templates).
+# Set-level rejection details. One template per reason renders both the Python
+# string and the Spark SQL expression, so the two cannot drift apart.
+SEQUENCE_CONFLICT_TEMPLATE = (
+    '[{"code":"SEQUENCE_CONFLICT","field":null,"held_event_id":"{held_event_id}",'
+    '"message":"another event already holds this (robot, boot_number, sequence_number)"}]'
+)
+EVENT_ID_CONFLICT_TEMPLATE = (
+    '[{"code":"EVENT_ID_CONFLICT","field":null,"held_kafka_offset":{held_kafka_offset},'
+    '"held_kafka_partition":{held_kafka_partition},'
+    '"message":"same event_id as an earlier record with different content"}]'
+)
+
+
+def _fill(template: str, values: Mapping[str, Any]) -> str:
+    for k, v in values.items():
+        template = template.replace("{" + k + "}", str(v))
+    return template
+
+
+def template_sql(template: str, columns: Mapping[str, str]) -> str:
+    """concat('<literal>', CAST(<expr> AS STRING), ...) rendering of a template, with
+    each {placeholder} replaced by a Spark SQL expression. Literal parts may contain
+    JSON braces but no single quote or backslash (checked), so need no escaping."""
+    pattern = "(" + "|".join(re.escape("{" + k + "}") for k in columns) + ")"
+    out = []
+    for part in re.split(pattern, template):
+        if part.startswith("{") and part[1:-1] in columns:
+            out.append(f"CAST({columns[part[1:-1]]} AS STRING)")
+        elif part:
+            if "'" in part or "\\" in part:
+                raise ValueError(f"template literal needs escaping: {part!r}")
+            out.append(f"'{part}'")
+    return "concat(" + ", ".join(out) + ")"
+
+
 def sequence_conflict_errors(held_event_id: str) -> str:
-    return (
-        '[{"code":"SEQUENCE_CONFLICT","field":null,"held_event_id":"' + held_event_id
-        + '","message":"another event already holds this (robot, boot_number, sequence_number)"}]'
-    )  # fmt: skip
+    return _fill(SEQUENCE_CONFLICT_TEMPLATE, {"held_event_id": held_event_id})
 
 
 def event_id_conflict_errors(held_offset: int, held_partition: int) -> str:
-    return (
-        '[{"code":"EVENT_ID_CONFLICT","field":null,"held_kafka_offset":' + str(held_offset)
-        + ',"held_kafka_partition":' + str(held_partition)
-        + ',"message":"same event_id as an earlier record with different content"}]'
-    )  # fmt: skip
+    values = {"held_kafka_offset": held_offset, "held_kafka_partition": held_partition}
+    return _fill(EVENT_ID_CONFLICT_TEMPLATE, values)
+
+
+# reason_code -> (error_category, retry_eligible) for every reason Silver can emit.
+REASON_TABLE: dict[str, tuple[str, bool]] = {
+    code: reason_category(code)
+    for code in [
+        *(c.value for c in ReasonCode if c in REASONS),
+        SilverReason.EVENT_ID_CONFLICT.value,
+    ]
+}
 
 
 @dataclass
@@ -501,3 +540,58 @@ def build(prepared: Iterable[Prepared], *, build_id: str) -> SilverBuild:
 
 EVENT_COLUMNS = SILVER_TELEMETRY_EVENTS.column_names
 OUTCOME_COLUMNS = SILVER_TELEMETRY_RECORD_OUTCOMES.column_names
+
+# ------------------------------------------------------------------ row stage on Spark
+
+# The row stage's output as flat columns: what mapInPandas returns and the Spark set
+# stage consumes. Bronze lineage first, then the decision, then the canonical event.
+PREPARED_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("source_topic", "STRING"),
+    ("kafka_topic_id", "STRING"),
+    ("kafka_partition", "INT"),
+    ("kafka_offset", "BIGINT"),
+    ("kafka_timestamp", "TIMESTAMP"),
+    ("ingested_at", "TIMESTAMP"),
+    ("value_schema_id", "BIGINT"),
+    ("status", "STRING"),  # VALID | INVALID
+    ("reason_code", "STRING"),
+    ("errors", "STRING"),
+    ("event_id", "STRING"),
+    ("robot_id", "STRING"),
+    *((f, t) for f, t in (
+        ("boot_id", "STRING"), ("boot_number", "BIGINT"), ("sequence_number", "BIGINT"),
+        ("observed_at", "TIMESTAMP"), ("robot_model", "STRING"), ("firmware_version", "STRING"),
+        ("battery_pct", "DOUBLE"), ("x_m", "DOUBLE"), ("y_m", "DOUBLE"),
+        ("heading_rad", "DOUBLE"), ("motor_temp_c", "DOUBLE"), ("lidar_ok", "BOOLEAN"),
+        ("source_battery_unit", "STRING"), ("source_position_unit", "STRING"),
+        ("quality_flags", "ARRAY<STRING>"), ("schema_version", "INT"),
+        ("writer_schema_id", "BIGINT"), ("producer_id", "STRING"), ("produced_at", "TIMESTAMP"),
+        ("correction_of", "STRING"), ("fingerprint", "STRING"),
+    )),
+)  # fmt: skip
+PREPARED_SCHEMA = ", ".join(f"{n} {t}" for n, t in PREPARED_COLUMNS)
+_CANONICAL_FIELDS = [n for n, _ in PREPARED_COLUMNS[12:]]
+
+
+def prepared_row(p: Prepared) -> dict[str, Any]:
+    """Flatten a Prepared for Spark. Keys are exactly PREPARED_COLUMNS."""
+    r = p.row
+    out: dict[str, Any] = {
+        "source_topic": r["source_topic"],
+        "kafka_topic_id": r["kafka_topic_id"],
+        "kafka_partition": r["kafka_partition"],
+        "kafka_offset": r["kafka_offset"],
+        "kafka_timestamp": r["kafka_timestamp"],
+        "ingested_at": r["ingested_at"],
+        "value_schema_id": r["value_schema_id"],
+        "status": "VALID" if p.event is not None else "INVALID",
+        "reason_code": p.reason,
+        "errors": p.errors,
+        "event_id": p.event_id,
+        "robot_id": p.robot_id,
+    }
+    e = p.event
+    for name in _CANONICAL_FIELDS:
+        value = getattr(e, name) if e is not None else None
+        out[name] = list(value) if name == "quality_flags" and value is not None else value
+    return out
