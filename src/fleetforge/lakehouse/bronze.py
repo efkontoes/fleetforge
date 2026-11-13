@@ -80,6 +80,7 @@ def framing(value: bytes | None) -> tuple[str, int | None]:
 # columns. Must agree with framing()/bronze_row(); tests/lakehouse checks they do.
 _IS_FRAMED = "(length(value) >= 5 AND hex(substring(value, 1, 1)) = '00')"
 SPARK_FRAMING_SQL = {
+    "kafka_timestamp": "CASE WHEN unix_millis(timestamp) >= 0 THEN timestamp END",
     "value_sha256": "sha2(value, 256)",
     "value_framing": (
         f"CASE WHEN value IS NULL THEN '{TOMBSTONE}' WHEN {_IS_FRAMED} THEN '{CONFLUENT}' "
@@ -201,6 +202,46 @@ def checkpoints_from_data(
         if latest[topic][1] == topic_id:
             out.setdefault(topic, {})[part] = max_offset + 1
     return {t: TopicCheckpoint(t, latest[t][1], parts) for t, parts in out.items()}
+
+
+def merge_checkpoints(
+    from_snapshots: Mapping[str, TopicCheckpoint], from_data: Mapping[str, TopicCheckpoint]
+) -> dict[str, TopicCheckpoint]:
+    """Combine the committed checkpoint with the one derived from the data.
+
+    Normally they agree. The data can be ahead when a run found only rows that were
+    already in Bronze (a replay) and so committed nothing; taking the larger offset
+    keeps such a run from being repeated forever. When the topic ids differ, the
+    snapshot wins: it records the newest operator decision (an accepted new
+    incarnation that has no rows yet)."""
+    out = dict(from_data)
+    for topic, cp in from_snapshots.items():
+        data = from_data.get(topic)
+        if data is None or data.topic_id != cp.topic_id:
+            out[topic] = cp
+            continue
+        parts = dict(data.next_offsets)
+        for p, o in cp.next_offsets.items():
+            parts[p] = max(o, parts.get(p, o))
+        out[topic] = TopicCheckpoint(topic, cp.topic_id, parts)
+    return out
+
+
+def latest_checkpoint(
+    snapshots: Iterable[tuple[int, int | None, Mapping[str, str]]], current: int | None
+) -> dict[str, TopicCheckpoint]:
+    """Walk from the current snapshot through its ancestors to the newest one that
+    carries a checkpoint. Maintenance commits (compaction, expiry) have none.
+
+    snapshots: (snapshot_id, parent_id, summary) for the snapshots still in metadata."""
+    by_id = {sid: (parent, summary) for sid, parent, summary in snapshots}
+    sid = current
+    while sid is not None and sid in by_id:
+        parent, summary = by_id[sid]
+        if CHECKPOINT_PROPERTY in summary:
+            return decode_checkpoints(summary[CHECKPOINT_PROPERTY])
+        sid = parent
+    return {}
 
 
 # --------------------------------------------------------------------------- planning
