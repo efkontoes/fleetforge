@@ -301,3 +301,72 @@ def test_quiet_captured_tables_do_not_pin_wal_under_telemetry_load(
         f"\nload wrote {produced:.0f} MB of WAL; slots retained <10% of it within {took:.0f}s "
         f"(now {retained_mb():.1f} MB)"
     )
+
+
+def prom(query: str) -> float | None:
+    r = httpx.get("http://localhost:9090/api/v1/query", params={"query": query}, timeout=5)
+    res = r.json()["data"]["result"]
+    return float(res[0]["value"][1]) if res else None
+
+
+def _source_vs_downstream(db, mids):
+    with db.connect() as conn:
+        return conn.execute(text("""
+            SELECT m.mission_id, m.version AS src, d.version AS dst
+            FROM fleet.missions m LEFT JOIN downstream.mission_status d USING (mission_id)
+            WHERE m.mission_id = ANY(CAST(:ids AS uuid[]))"""), {"ids": mids}).all()  # fmt: skip
+
+
+@pytest.mark.disruptive
+def test_debezium_killed_during_mission_updates_is_detected_and_recovers(stack_db,
+                                                                         record_property):  # fmt: skip
+    """E4: SIGKILL Kafka Connect while mission transitions are being committed. The
+    stall must be visible through the end-to-end completeness metric (not only the
+    connector state), and every committed transition must reach the downstream
+    read model after restart."""
+    import threading
+
+    c = api()
+    mids: list[str] = []
+    stop = threading.Event()
+
+    def traffic():
+        with api() as cl:
+            while not stop.is_set():
+                mids.append(lifecycle(cl, new_robot(cl)))
+                time.sleep(0.2)
+
+    t = threading.Thread(target=traffic)
+    t.start()
+    try:
+        wait_until(lambda: len(mids) >= 5, 60, msg="traffic flowing")
+        compose("kill", "connect")
+        killed_at, during = time.monotonic(), len(mids)
+        # The exporter (15 s scrape) must see committed changes that are not delivered.
+        detected = wait_until(lambda: (prom("fleetforge_cdc_missions_behind") or 0) > 0, 90,
+                              2, "stall visible in Prometheus")  # fmt: skip
+        time.sleep(max(0.0, 20 - (time.monotonic() - killed_at)))
+        compose("start", "connect")
+        restarted_at = time.monotonic()
+        wait_until(lambda: len(mids) >= during + 5, 60, msg="traffic during and after")
+    finally:
+        stop.set()
+        t.join(60)
+    assert len(mids) > during  # transitions really were committed during the outage
+    rows = []
+
+    def all_delivered():
+        rows[:] = _source_vs_downstream(stack_db, mids)
+        return len(rows) == len(mids) and all(r.dst == r.src for r in rows)
+
+    recovered = wait_until(all_delivered, 240, 1, "every mission delivered downstream")
+    downtime = restarted_at - killed_at
+    wait_until(lambda: prom("fleetforge_cdc_missions_behind") == 0, 60, 2, "metric back to 0")
+    record_property("cdc_outage_s", round(downtime, 1))
+    record_property("cdc_stall_detected_after_s", round(detected, 1))
+    record_property("cdc_recovery_after_restart_s", round(recovered, 1))
+    record_property("missions_committed", len(mids))
+    print(f"\nkilled {downtime:.0f}s; stall visible after {detected:.0f}s; all {len(mids)} "
+          f"missions delivered {recovered:.0f}s after restart")  # fmt: skip
+    assert all(r.src == 3 for r in rows)  # ASSIGNED -> RUNNING -> COMPLETED, nothing lost
+    c.close()

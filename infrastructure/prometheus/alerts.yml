@@ -73,3 +73,26 @@ groups:
         labels: {severity: ticket}
         annotations:
           summary: Outbox events take more than 30 s (p95) to reach the downstream consumer
+
+      - alert: CdcDeliveryStalled
+        # CdcEndToEndSlow is computed from DELIVERED events and is silent during a total
+        # stall. This compares the source of truth (fleet.missions.version) with the
+        # downstream read model directly, so it fires whatever the cause.
+        expr: max(fleetforge_cdc_oldest_undelivered_seconds) > 120
+        for: 2m
+        labels: {severity: page}
+        annotations:
+          summary: A committed mission change has not reached the downstream consumer for 2+ minutes
+
+      - alert: ReplicationSlotNearInvalidation
+        expr: min(fleetforge_cdc_slot_safe_wal_bytes) < 512 * 1024 * 1024
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: A replication slot is within 512 MiB of max_slot_wal_keep_size
+
+      - alert: ReplicationSlotLost
+        expr: max(fleetforge_cdc_slot_lost) == 1
+        labels: {severity: page}
+        annotations:
+          summary: A replication slot was invalidated; streaming cannot resume (re-snapshot, see runbook)

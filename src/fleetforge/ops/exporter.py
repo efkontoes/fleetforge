@@ -46,6 +46,16 @@ class OpsCollector:
         g = GaugeMetricFamily
         slots = g("fleetforge_cdc_slot_retained_wal_bytes", "WAL kept by slot", labels=["slot"])
         active = g("fleetforge_cdc_slot_active", "1 if a consumer is attached", labels=["slot"])
+        safe = g("fleetforge_cdc_slot_safe_wal_bytes",
+                 "WAL that can still be written before max_slot_wal_keep_size invalidates the slot",
+                 labels=["slot"])  # fmt: skip
+        lost = g("fleetforge_cdc_slot_lost",
+                 "1 if the slot was invalidated (wal_status=lost): a re-snapshot is required",
+                 labels=["slot"])  # fmt: skip
+        behind = g("fleetforge_cdc_missions_behind",
+                   "Missions whose downstream version is behind fleet.missions")  # fmt: skip
+        behind_age = g("fleetforge_cdc_oldest_undelivered_seconds",
+                       "Age of the oldest mission change not yet reflected downstream")  # fmt: skip
         conns = g("fleetforge_pg_connections", "Backends by role/state", labels=["role", "state"])
         outbox = g("fleetforge_outbox_rows", "Rows in fleet.outbox_events")
         outbox_age = g("fleetforge_outbox_newest_age_seconds", "Seconds since newest outbox row")
@@ -53,11 +63,24 @@ class OpsCollector:
         stale = g("fleetforge_read_model_staleness_seconds", "Since newest latest-state update")
         with self.engine.connect() as c:
             for r in c.execute(text("""
-                SELECT slot_name, active,
+                SELECT slot_name, active, wal_status, safe_wal_size,
                        COALESCE(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn), 0) AS retained
                 FROM pg_replication_slots""")):  # fmt: skip
                 slots.add_metric([r.slot_name], float(r.retained))
                 active.add_metric([r.slot_name], 1.0 if r.active else 0.0)
+                lost.add_metric([r.slot_name], 1.0 if r.wal_status == "lost" else 0.0)
+                if r.safe_wal_size is not None:  # NULL when no cap is configured
+                    safe.add_metric([r.slot_name], float(r.safe_wal_size))
+            # End-to-end completeness of the outbox -> CDC -> consumer path. A committed
+            # mission change exists in fleet.missions; it is delivered once the
+            # independent consumer's row has caught up with its version.
+            n_behind, age = c.execute(text("""
+                SELECT count(*), EXTRACT(EPOCH FROM now() - min(m.updated_at))
+                FROM fleet.missions m
+                LEFT JOIN downstream.mission_status d USING (mission_id)
+                WHERE d.version IS NULL OR d.version < m.version""")).one()  # fmt: skip
+            behind.add_metric([], n_behind)
+            behind_age.add_metric([], float(age or 0))
             for r in c.execute(text("""
                 SELECT COALESCE(usename, 'system') AS role, COALESCE(state, 'n/a') AS state,
                        count(*) AS n
@@ -75,7 +98,19 @@ class OpsCollector:
             s = c.execute(text("SELECT EXTRACT(EPOCH FROM now() - max(updated_at))"
                                " FROM fleet.robot_latest_state")).scalar()  # fmt: skip
             stale.add_metric([], float(s or 0))
-        yield from (slots, active, conns, outbox, outbox_age, quarantine, stale)
+        yield from (
+            slots,
+            active,
+            safe,
+            lost,
+            behind,
+            behind_age,
+            conns,
+            outbox,
+            outbox_age,
+            quarantine,
+            stale,
+        )
 
     def _connect(self):
         up = GaugeMetricFamily("fleetforge_cdc_connector_up",
