@@ -89,6 +89,13 @@ services:
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_MESSAGE_MAX_BYTES: 1048576
       KAFKA_HEAP_OPTS: -Xmx384m -Xms384m
+      # Kafka's documented production GC settings. Without them the JVM's ergonomics
+      # pick the single-threaded Serial collector for a container this small; its
+      # stop-the-world Full GCs (2.1 s and 11.8 s measured) froze the broker and were
+      # the cause of the Milestone 2 latency tail (benchmarks/milestone-2-report.md).
+      KAFKA_JVM_PERFORMANCE_OPTS: >-
+        -server -XX:+UseG1GC -XX:MaxGCPauseMillis=20 -XX:InitiatingHeapOccupancyPercent=35
+        -XX:+ExplicitGCInvokesConcurrent -Djava.awt.headless=true
     ports: ["127.0.0.1:29092:29092"]
     volumes: [kafkadata:/var/lib/kafka/data]
     healthcheck:
@@ -98,6 +105,10 @@ services:
       timeout: 3s
       retries: 30
     mem_limit: 768m
+    # No swap for the broker: a GC that must page its heap back in from swap is
+    # several times slower (measured: User+Sys 2.9 s, Real 11.8 s). Under host
+    # memory pressure the kernel swaps idle containers instead.
+    memswap_limit: 768m
 
   kafka-init:
     profiles: *core-profiles

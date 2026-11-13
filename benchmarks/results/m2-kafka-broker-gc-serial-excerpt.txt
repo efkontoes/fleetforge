@@ -1,0 +1,79 @@
+# Kafka broker GC log excerpt: Serial collector (before the fix). Every pause > 200 ms with its CPU line.
+# Real >> User+Sys means the pause was spent waiting (paging from swap / CPU starvation), not collecting.
+# Source: /opt/kafka/logs/kafkaServer-gc.log* in the kafka container, captured 2026-11-12 ~23:20Z and ~23:33Z.
+[2026-11-12T12:55:21.046+0000][gc     ] Using Serial
+[2026-11-12T13:24:22.257+0000][gc     ] Using Serial
+[2026-11-12T13:25:23.904+0000][gc     ] Using Serial
+[2026-11-12T19:28:35.641+0000][gc     ] Using Serial
+[2026-11-12T12:55:25.044+0000][gc          ] GC(0) Pause Young (Allocation Failure) 103M->22M(371M) 853.572ms
+[2026-11-12T12:55:25.044+0000][gc,cpu      ] GC(0) User=0.05s Sys=0.80s Real=0.85s
+[2026-11-12T13:12:50.340+0000][gc          ] GC(2) Pause Young (Allocation Failure) 262M->172M(371M) 267.380ms
+[2026-11-12T13:12:50.340+0000][gc,cpu      ] GC(2) User=0.27s Sys=0.00s Real=0.27s
+[2026-11-12T13:15:42.474+0000][gc          ] GC(3) Pause Young (Allocation Failure) 274M->174M(371M) 386.398ms
+[2026-11-12T13:15:42.474+0000][gc,cpu      ] GC(3) User=0.26s Sys=0.10s Real=0.38s
+[2026-11-12T13:20:38.076+0000][gc          ] GC(5) Pause Young (Allocation Failure) 283M->184M(371M) 202.850ms
+[2026-11-12T13:20:38.076+0000][gc,cpu      ] GC(5) User=0.19s Sys=0.01s Real=0.20s
+[2026-11-12T13:23:03.115+0000][gc          ] GC(6) Pause Young (Allocation Failure) 286M->189M(371M) 277.696ms
+[2026-11-12T13:23:03.115+0000][gc,cpu      ] GC(6) User=0.28s Sys=0.01s Real=0.27s
+[2026-11-12T13:30:31.198+0000][gc          ] GC(5) Pause Young (Allocation Failure) 281M->190M(371M) 402.970ms
+[2026-11-12T13:30:31.198+0000][gc,cpu      ] GC(5) User=0.40s Sys=0.00s Real=0.41s
+[2026-11-12T18:12:37.201+0000][gc          ] GC(6) Pause Young (Allocation Failure) 293M->198M(371M) 2303.030ms
+[2026-11-12T18:12:37.201+0000][gc,cpu      ] GC(6) User=1.85s Sys=0.30s Real=2.32s
+[2026-11-12T18:14:06.140+0000][gc          ] GC(8) Pause Young (Allocation Failure) 301M->206M(371M) 380.960ms
+[2026-11-12T18:14:06.140+0000][gc,cpu      ] GC(8) User=0.39s Sys=0.00s Real=0.38s
+[2026-11-12T18:16:11.799+0000][gc          ] GC(9) Pause Young (Allocation Failure) 309M->211M(371M) 950.316ms
+[2026-11-12T18:16:11.799+0000][gc,cpu      ] GC(9) User=0.85s Sys=0.03s Real=0.95s
+[2026-11-12T18:22:07.789+0000][gc          ] GC(12) Pause Young (Allocation Failure) 321M->223M(371M) 284.129ms
+[2026-11-12T18:22:07.789+0000][gc,cpu      ] GC(12) User=0.28s Sys=0.00s Real=0.28s
+[2026-11-12T18:30:52.184+0000][gc             ] GC(15) Pause Full (CodeCache GC Threshold) 325M->201M(371M) 2363.722ms
+[2026-11-12T18:30:52.184+0000][gc,cpu         ] GC(15) User=1.26s Sys=0.07s Real=2.37s
+[2026-11-12T18:53:23.819+0000][gc             ] GC(42) Pause Full (Allocation Failure) 360M->203M(371M) 2104.130ms
+[2026-11-12T18:53:23.819+0000][gc,cpu         ] GC(42) User=2.01s Sys=0.00s Real=2.10s
+[2026-11-12T19:05:59.336+0000][gc             ] GC(60) Pause Young (Allocation Failure) 328M->242M(371M) 390.085ms
+[2026-11-12T19:05:59.336+0000][gc,cpu         ] GC(60) User=0.36s Sys=0.00s Real=0.39s
+[2026-11-12T19:10:19.982+0000][gc             ] GC(61) Pause Young (Allocation Failure) 344M->247M(371M) 1405.054ms
+[2026-11-12T19:15:50.781+0000][gc             ] GC(63) Pause Young (Allocation Failure) 354M->257M(371M) 307.574ms
+[2026-11-12T19:15:50.781+0000][gc,cpu         ] GC(63) User=0.25s Sys=0.01s Real=0.31s
+[2026-11-12T19:18:41.193+0000][gc             ] GC(66) Pause Full (Allocation Failure) 364M->217M(371M) 3081.976ms
+[2026-11-12T19:18:41.193+0000][gc,cpu         ] GC(66) User=2.07s Sys=0.09s Real=3.08s
+[2026-11-12T19:28:42.342+0000][gc          ] GC(1) Pause Young (Allocation Failure) 253M->162M(371M) 254.991ms
+[2026-11-12T19:28:42.342+0000][gc,cpu      ] GC(1) User=0.07s Sys=0.18s Real=0.25s
+[2026-11-12T20:01:18.580+0000][gc             ] GC(23) Pause Full (Allocation Failure) 356M->200M(371M) 2865.578ms
+[2026-11-12T20:01:18.580+0000][gc,cpu         ] GC(23) User=1.59s Sys=0.05s Real=2.87s
+[2026-11-12T20:29:03.307+0000][gc             ] GC(38) Pause Full (Allocation Failure) 360M->200M(371M) 498.532ms
+[2026-11-12T20:29:03.307+0000][gc,cpu         ] GC(38) User=0.44s Sys=0.00s Real=0.50s
+[2026-11-12T22:49:26.930+0000][gc             ] GC(47) Pause Young (Allocation Failure) 338M->241M(371M) 927.508ms
+[2026-11-12T22:49:26.930+0000][gc,cpu         ] GC(47) User=0.94s Sys=0.00s Real=0.93s
+[2026-11-12T22:51:29.264+0000][gc             ] GC(48) Pause Young (Allocation Failure) 344M->248M(371M) 1528.944ms
+[2026-11-12T22:51:29.264+0000][gc,cpu         ] GC(48) User=1.59s Sys=0.00s Real=1.53s
+[2026-11-12T22:53:31.806+0000][gc             ] GC(49) Pause Young (Allocation Failure) 350M->250M(371M) 1004.793ms
+[2026-11-12T22:53:31.806+0000][gc,cpu         ] GC(49) User=1.03s Sys=0.00s Real=1.00s
+[2026-11-12T22:55:39.536+0000][gc             ] GC(51) Pause Full (Allocation Failure) 353M->201M(371M) 5346.375ms
+[2026-11-12T22:55:39.536+0000][gc,cpu         ] GC(51) User=5.43s Sys=0.00s Real=5.35s
+[2026-11-12T22:59:43.742+0000][gc             ] GC(53) Pause Young (Allocation Failure) 311M->211M(371M) 213.786ms
+[2026-11-12T22:59:43.742+0000][gc,cpu         ] GC(53) User=0.22s Sys=0.00s Real=0.21s
+[2026-11-12T23:03:48.892+0000][gc             ] GC(55) Pause Young (Allocation Failure) 319M->219M(371M) 291.424ms
+[2026-11-12T23:05:59.654+0000][gc             ] GC(56) Pause Young (Allocation Failure) 321M->224M(371M) 601.815ms
+[2026-11-12T23:05:59.654+0000][gc,cpu         ] GC(56) User=0.61s Sys=0.00s Real=0.60s
+[2026-11-12T23:07:27.745+0000][gc             ] GC(57) Pause Young (Allocation Failure) 326M->229M(371M) 745.209ms
+[2026-11-12T23:07:27.745+0000][gc,cpu         ] GC(57) User=0.77s Sys=0.00s Real=0.75s
+[2026-11-12T23:09:21.118+0000][gc             ] GC(58) Pause Young (Allocation Failure) 332M->234M(371M) 359.974ms
+[2026-11-12T23:09:21.118+0000][gc,cpu         ] GC(58) User=0.37s Sys=0.00s Real=0.36s
+[2026-11-12T23:13:35.484+0000][gc             ] GC(60) Pause Young (Allocation Failure) 341M->243M(371M) 851.615ms
+[2026-11-12T23:13:35.484+0000][gc,cpu         ] GC(60) User=0.87s Sys=0.00s Real=0.85s
+[2026-11-12T23:15:30.023+0000][gc             ] GC(61) Pause Young (Allocation Failure) 346M->248M(371M) 569.169ms
+[2026-11-12T23:15:30.023+0000][gc,cpu         ] GC(61) User=0.38s Sys=0.01s Real=0.57s
+[2026-11-12T23:17:28.224+0000][gc             ] GC(62) Pause Young (Allocation Failure) 351M->253M(371M) 248.710ms
+[2026-11-12T23:17:28.224+0000][gc,cpu         ] GC(62) User=0.11s Sys=0.01s Real=0.25s
+[2026-11-12T23:18:19.028+0000][gc             ] GC(63) Pause Young (Allocation Failure) 356M->255M(371M) 407.063ms
+[2026-11-12T23:18:19.028+0000][gc,cpu         ] GC(63) User=0.11s Sys=0.02s Real=0.41s
+[2026-11-12T23:18:38.166+0000][gc             ] GC(65) Pause Full (Allocation Failure) 358M->188M(371M) 11772.807ms
+[2026-11-12T23:18:38.166+0000][gc,cpu         ] GC(65) User=2.08s Sys=0.79s Real=11.78s
+[2026-11-12T23:28:54.032+0000][gc             ] GC(104) Pause Young (Allocation Failure) 329M->228M(371M) 442.567ms
+[2026-11-12T23:28:54.032+0000][gc,cpu         ] GC(104) User=0.28s Sys=0.04s Real=0.44s
+[2026-11-12T23:31:15.884+0000][gc             ] GC(115) Pause Young (Allocation Failure) 337M->236M(371M) 435.505ms
+[2026-11-12T23:31:15.884+0000][gc,cpu         ] GC(115) User=0.24s Sys=0.00s Real=0.43s
+[2026-11-12T23:32:08.550+0000][gc             ] GC(124) Pause Young (Allocation Failure) 346M->247M(371M) 208.162ms
+[2026-11-12T23:32:08.550+0000][gc,cpu         ] GC(124) User=0.16s Sys=0.02s Real=0.21s
+[2026-11-12T23:32:33.506+0000][gc             ] GC(125) Pause Young (Allocation Failure) 349M->249M(371M) 541.019ms
+[2026-11-12T23:32:33.506+0000][gc,cpu         ] GC(125) User=0.41s Sys=0.01s Real=0.55s
