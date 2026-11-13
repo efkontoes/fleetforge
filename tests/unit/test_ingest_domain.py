@@ -150,22 +150,108 @@ class TestRegistryOutageClassification:
             TelemetryDecoder,
         )
 
-        class FailingDeserializer:
+        class FailingClient:
             def __init__(self, exc):
                 self.exc = exc
 
-            def __call__(self, value, ctx):
+            def get_schema(self, schema_id):
                 raise self.exc
 
-        dec = TelemetryDecoder.__new__(TelemetryDecoder)
-        dec._ctx = None
         framed = b"\x00\x00\x00\x00\x01payload"
-        dec._de = FailingDeserializer(SchemaRegistryError(500, 50001, "db down"))
+        dec = TelemetryDecoder(FailingClient(SchemaRegistryError(500, 50001, "db down")), "t")
         with pytest.raises(RegistryUnavailable):
             dec.decode(framed)
         assert is_recoverable(RegistryUnavailable("x"))
-        dec._de = FailingDeserializer(SchemaRegistryError(404, 40403, "schema not found"))
+        dec = TelemetryDecoder(FailingClient(SchemaRegistryError(404, 40403, "not found")), "t")
         with pytest.raises(DecodeError):
             dec.decode(framed)
         with pytest.raises(DecodeError):
             dec.decode(b"{not avro}")
+        assert dec._writers == {}  # failures are never cached
+
+
+class TestDecoderEquivalence:
+    """The projector decodes with fastavro directly (final audit: the Confluent
+    deserializer's per-message rule/tag machinery was ~25 % of projector CPU). It must
+    return exactly what confluent-kafka's AvroDeserializer returns."""
+
+    def _clients(self):
+        from confluent_kafka.schema_registry._sync.mock_schema_registry_client import (
+            MockSchemaRegistryClient,
+        )
+
+        from fleetforge.kafka.schemas import register
+
+        c = MockSchemaRegistryClient({"url": "mock://equivalence"})
+        register(c, "telemetry.raw.v1-value", 1, set_rule=False)
+        register(c, "telemetry.raw.v1-value", 2, set_rule=False)
+        return c
+
+    def test_v1_and_v2_records_decode_identically(self):
+        from datetime import UTC, datetime
+
+        from confluent_kafka.schema_registry.avro import AvroDeserializer
+        from confluent_kafka.serialization import MessageField, SerializationContext
+
+        from fleetforge.kafka.codec import TelemetryDecoder, TelemetryEncoder
+
+        c = self._clients()
+        ref = AvroDeserializer(c)
+        ctx = SerializationContext("telemetry.raw.v1", MessageField.VALUE)
+        ours = TelemetryDecoder(c, "telemetry.raw.v1")
+        t = datetime(2026, 11, 12, 10, 0, tzinfo=UTC)
+        base = {"schema_version": 1, "event_id": "8d0b8c4e-63b6-4a43-9a8f-2b7a3cdbdc11",
+                "robot_id": "1f3c3a4e-0b0c-4d5f-8a8b-9c0d1e2f3a4b",
+                "boot_id": "2a3b4c5d-6e7f-4081-92a3-b4c5d6e7f809", "boot_number": 3,
+                "sequence_number": 42, "observed_at": t, "firmware_version": "1.0.0",
+                "battery_pct": 55.5, "position": {"x_m": 1.25, "y_m": -3.5}, "sensors": None,
+                "correction_of": None,
+                "producer": {"producer_id": "p", "produced_at": t}}  # fmt: skip
+        sensors = {"motor_temp_c": 40.5, "lidar_ok": True}
+        for rev, rec in [(1, base), (1, {**base, "sensors": sensors}),
+                         (1, {**base, "correction_of": base["boot_id"]}),
+                         (2, {**base, "heading_rad": 1.5, "sensors": sensors})]:  # fmt: skip
+            value = TelemetryEncoder(c, "telemetry.raw.v1", revision=rev).encode(rec)
+            assert ours.decode(value) == ref(value, ctx)
+
+    def test_corrupt_bodies_are_permanent_decode_errors(self):
+        from fleetforge.kafka.codec import DecodeError, TelemetryDecoder
+
+        c = self._clients()
+        dec = TelemetryDecoder(c, "telemetry.raw.v1")
+        sid = c.get_latest_version("telemetry.raw.v1-value").schema_id
+        framed = b"\x00" + sid.to_bytes(4, "big")
+        for body in [b"", b"\x02", b"\xff" * 3]:
+            with pytest.raises(DecodeError):
+                dec.decode(framed + body)
+        with pytest.raises(DecodeError):
+            dec.decode(b"\x00\x00\x00\x27\x0f" + b"x")  # unknown schema id
+
+
+class TestKafkaRetry:
+    def test_transient_admin_errors_are_retried_and_others_are_not(self):
+        from confluent_kafka import KafkaError, KafkaException
+
+        from fleetforge.kafka.retry import retry_transient
+
+        calls = []
+
+        def flaky():
+            calls.append(1)
+            if len(calls) < 3:
+                raise KafkaException(KafkaError(KafkaError._DESTROY_BROKER))
+            return "ok"
+
+        assert retry_transient(flaky, backoff_s=0) == "ok" and len(calls) == 3
+
+        def permanent():
+            raise KafkaException(KafkaError(KafkaError.UNKNOWN_TOPIC_OR_PART))
+
+        with pytest.raises(KafkaException):
+            retry_transient(permanent, backoff_s=0)
+
+        def always():
+            raise KafkaException(KafkaError(KafkaError._TIMED_OUT))
+
+        with pytest.raises(KafkaException):
+            retry_transient(always, attempts=3, backoff_s=0)

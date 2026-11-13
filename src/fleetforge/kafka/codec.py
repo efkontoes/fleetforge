@@ -4,11 +4,14 @@ any language can partition consistently without the registry."""
 
 from __future__ import annotations
 
+import io
+import json
 from datetime import UTC, datetime
 from typing import Any
 
+import fastavro
 from confluent_kafka.schema_registry import SchemaRegistryClient
-from confluent_kafka.schema_registry.avro import AvroDeserializer, AvroSerializer
+from confluent_kafka.schema_registry.avro import AvroSerializer
 from confluent_kafka.schema_registry.error import SchemaRegistryError
 from confluent_kafka.serialization import MessageField, SerializationContext
 
@@ -58,20 +61,42 @@ class TelemetryEncoder:
 class TelemetryDecoder:
     """Decodes with the *writer's* schema (looked up by the id in the message), so a
     consumer built for revision 1 still decodes revision-2 data (extra fields ignored
-    by the contract layer). Schema ids are cached by the client."""
+    by the contract layer).
+
+    The framing (magic byte 0 + 4-byte big-endian schema id) is read here and the body
+    decoded with fastavro, the library confluent-kafka's AvroDeserializer uses
+    underneath. The Confluent deserializer also evaluates data-contract rules and
+    walks the whole schema for inline field tags on EVERY message; we use neither,
+    and that walk was ~25 % of the projector's CPU (benchmarks/projector_gc.py
+    profile, final audit). Parsed writer schemas are cached per id: ids are
+    immutable. Unknown ids are not cached (404 -> DecodeError, permanent)."""
 
     def __init__(self, client: SchemaRegistryClient, topic: str):
-        self._ctx = SerializationContext(topic, MessageField.VALUE)
-        self._de = AvroDeserializer(client)
+        self._client = client
+        self._writers: dict[int, Any] = {}
+
+    def _writer(self, schema_id: int) -> Any:
+        parsed = self._writers.get(schema_id)
+        if parsed is None:
+            try:
+                registered = self._client.get_schema(schema_id)
+            except Exception as exc:
+                if _registry_down(exc):
+                    raise RegistryUnavailable(str(exc)) from exc
+                raise DecodeError(f"schema id {schema_id}: {type(exc).__name__}: {exc}") from exc
+            if registered.schema_type not in (None, "AVRO"):
+                raise DecodeError(f"schema id {schema_id} is {registered.schema_type}, not AVRO")
+            parsed = fastavro.parse_schema(json.loads(registered.schema_str))
+            self._writers[schema_id] = parsed
+        return parsed
 
     def decode(self, value: bytes | None) -> dict[str, Any]:
-        if not value or value[0] != 0:
+        if not value or len(value) < 5 or value[0] != 0:
             raise DecodeError("not Confluent-framed Avro (missing magic byte 0)")
+        writer = self._writer(int.from_bytes(value[1:5], "big"))
         try:
-            rec = self._de(value, self._ctx)
-        except Exception as exc:  # serializer raises several error types
-            if _registry_down(exc):
-                raise RegistryUnavailable(str(exc)) from exc
+            rec = fastavro.schemaless_reader(io.BytesIO(value[5:]), writer, None)
+        except Exception as exc:  # truncated body, invalid union index, bad UTF-8, ...
             raise DecodeError(f"{type(exc).__name__}: {exc}") from exc
         if not isinstance(rec, dict):
             raise DecodeError("decoded value is not a record")

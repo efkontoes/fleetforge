@@ -10,6 +10,7 @@ A failure in 2 rolls everything back; nothing is acknowledged anywhere.
 
 from __future__ import annotations
 
+import gc
 import logging
 import signal
 import threading
@@ -114,6 +115,13 @@ class Projector:
     # ------------------------------------------------------------------ loop
 
     def run(self, max_idle_s: float | None = None) -> RunStats:
+        # Everything allocated so far (modules, SQLAlchemy, schemas, clients) lives for
+        # the whole process. Freezing it removes it from every future full GC scan:
+        # measured gen-2 pauses 60-160 ms every ~2.5 s per projector before, < 1 ms
+        # after (benchmarks/projector_gc.py). Frozen objects are still freed by
+        # reference counting; they are only excluded from cycle detection.
+        gc.collect()
+        gc.freeze()
         self.consumer.subscribe([self.topic], on_assign=self._on_assign,
                                 on_revoke=self._on_revoke)  # fmt: skip
         idle_since = time.monotonic()

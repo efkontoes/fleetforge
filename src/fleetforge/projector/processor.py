@@ -119,7 +119,8 @@ class _Prepared:
     rejection: Rejection | None = None
     event_id: UUID | None = None
     robot_id: UUID | None = None
-    payload: Any = None
+    payload: Any = None  # JSON-safe audit copy; built only if the record is rejected
+    decoded: dict[str, Any] | None = None
 
 
 class RegistryCache:
@@ -230,10 +231,11 @@ class BatchProcessor:
             p.event_id, p.robot_id = identity_hints(p.payload)
             p.rejection = _rejection(ReasonCode.MALFORMED_PAYLOAD, str(exc))
             return p
-        p.payload = json_safe(decoded)
-        p.event_id, p.robot_id = identity_hints(p.payload)
+        p.decoded = decoded
         res = observation_from_record(decoded)
         if isinstance(res, Rejection):
+            p.payload = json_safe(decoded)
+            p.event_id, p.robot_id = identity_hints(p.payload)
             p.rejection = res
             return p
         p.event_id, p.robot_id = res.event_id, res.robot_id
@@ -251,7 +253,7 @@ class BatchProcessor:
             robot_id=p.robot_id,
             reason=rej.reason_code,
             errors=rej.errors,
-            payload=p.payload,
+            payload=p.payload if p.payload is not None else json_safe(p.decoded or {}),
             payload_bytes=r.value,
             source=self.source,
             topic=r.topic if self.source == "kafka" else None,
