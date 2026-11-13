@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import fastavro
+import httpx
 from confluent_kafka.schema_registry import SchemaRegistryClient
 from confluent_kafka.schema_registry.avro import AvroSerializer
 from confluent_kafka.schema_registry.error import SchemaRegistryError
@@ -29,16 +30,21 @@ class RegistryUnavailable(Exception):
 
 
 def _registry_down(exc: BaseException) -> bool:
+    """True if the failure says nothing about the record: transport errors of any
+    kind, and every registry answer except 404.
+
+    Classified by exception class, not by name. A hand-written list of names missed
+    httpx.ReadError ("Connection reset by peer" from a restarting registry), and the
+    final audit reproduced valid events being quarantined as MALFORMED_PAYLOAD
+    because of it."""
     seen = set()
     while exc is not None and id(exc) not in seen:
         seen.add(id(exc))
         if isinstance(exc, SchemaRegistryError):
-            # 404 = unknown schema id: the record references something that does not
-            # exist. Everything else (5xx, auth, ...) is the registry's problem.
+            # 404 = unknown schema id: possibly the record's fault (see TelemetryDecoder).
+            # Everything else (5xx, auth, ...) is the registry's problem.
             return exc.http_status_code != 404
-        name = type(exc).__name__
-        if name in {"ConnectError", "ConnectTimeout", "ReadTimeout", "RemoteProtocolError",
-                    "ConnectionError", "TimeoutException"}:  # fmt: skip
+        if isinstance(exc, httpx.TransportError | OSError | TimeoutError):
             return True
         exc = exc.__cause__ or exc.__context__
     return False
@@ -80,9 +86,10 @@ class TelemetryDecoder:
 
     def _registry_is_authoritative(self) -> bool:
         """True only if the registry demonstrably holds this topic's subject (uncached
-        call). Found by the final audit: Apicurio with KafkaSQL storage serves HTTP
-        before it has re-read its store from Kafka, and answers 404 for ids that do
-        exist. Treating that 404 as 'unknown schema' quarantined valid events."""
+        call). Defensive: a registry that is reachable but has not finished loading its
+        store (Apicurio KafkaSQL re-reads it from Kafka on start) could answer 404 for
+        ids that exist. This was suspected during the audit but NOT observed; the
+        observed misclassification was a transport error (see _registry_down)."""
         try:
             return self._subject in self._client.get_subjects(subject_prefix=self._subject)
         except Exception:

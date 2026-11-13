@@ -182,6 +182,15 @@ class TestRegistryOutageClassification:
         with pytest.raises(DecodeError):
             dec.decode(b"{not avro}")
         assert dec._writers == {}  # failures are never cached
+        # Every transport failure is the registry's problem, whatever its class name.
+        # Regression: httpx.ReadError ("connection reset by peer" while the registry
+        # restarts) was missing from a list of names and quarantined valid events.
+        import httpx
+
+        for exc in (httpx.ReadError("reset by peer"), httpx.WriteError("broken pipe"),
+                    httpx.PoolTimeout("pool"), ConnectionResetError(104, "reset")):  # fmt: skip
+            with pytest.raises(RegistryUnavailable):
+                TelemetryDecoder(FailingClient(exc), "t").decode(framed)
 
 
 class TestDecoderEquivalence:
@@ -263,6 +272,16 @@ class TestKafkaRetry:
 
         with pytest.raises(KafkaException):
             retry_transient(permanent, backoff_s=0)
+
+        slow = []
+
+        def future_timeout():  # concurrent.futures.TimeoutError is the builtin
+            slow.append(1)
+            if len(slow) < 2:
+                raise TimeoutError()
+            return "late"
+
+        assert retry_transient(future_timeout, backoff_s=0) == "late"
 
         def always():
             raise KafkaException(KafkaError(KafkaError._TIMED_OUT))

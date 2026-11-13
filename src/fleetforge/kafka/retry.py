@@ -33,11 +33,14 @@ def is_transient(exc: BaseException) -> bool:
 
 
 def retry_transient[T](fn: Callable[[], T], attempts: int = 6, backoff_s: float = 0.2) -> T:
+    """Also retries a future that timed out (concurrent.futures.TimeoutError is the
+    builtin TimeoutError): seen on CI when describe_topics ran right after a topic
+    was deleted and recreated and the controller was briefly busy."""
     for i in range(attempts):
         try:
             return fn()
-        except KafkaException as exc:
-            if i == attempts - 1 or not is_transient(exc):
+        except (KafkaException, TimeoutError) as exc:
+            if i == attempts - 1 or not (isinstance(exc, TimeoutError) or is_transient(exc)):
                 raise
             time.sleep(backoff_s * 2**i)
     raise AssertionError("unreachable")

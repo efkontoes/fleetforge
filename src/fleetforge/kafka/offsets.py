@@ -32,11 +32,13 @@ log = logging.getLogger(__name__)
 
 def topic_id(bootstrap: str, topic: str, timeout: float = 10.0) -> str:
     """Kafka's UUID for the current incarnation of `topic` (base64, as Kafka prints it)."""
-    admin = AdminClient({"bootstrap.servers": bootstrap})
-    desc = retry_transient(
-        lambda: admin.describe_topics(TopicCollection([topic]))[topic].result(timeout)
-    )
-    return str(desc.topic_id)
+
+    def once():  # a fresh client per attempt: one stuck connection cannot poison retries
+        admin = AdminClient({"bootstrap.servers": bootstrap})
+        futures = admin.describe_topics(TopicCollection([topic]), request_timeout=timeout)
+        return futures[topic].result(timeout + 5)
+
+    return str(retry_transient(once).topic_id)
 
 
 def resolve_start_offsets(

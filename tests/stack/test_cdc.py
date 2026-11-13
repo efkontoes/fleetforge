@@ -340,11 +340,15 @@ def test_debezium_killed_during_mission_updates_is_detected_and_recovers(stack_d
     t.start()
     try:
         wait_until(lambda: len(mids) >= 5, 60, msg="traffic flowing")
+        # Healthy: changes are a few seconds old at most when the exporter looks. (A
+        # non-zero "missions behind" count alone is normal while traffic flows.)
+        age = "max(fleetforge_cdc_oldest_undelivered_seconds)"
+        wait_until(lambda: (prom(age) or 0) < 15, 60, 2, "healthy CDC before the kill")
         compose("kill", "connect")
         killed_at, during = time.monotonic(), len(mids)
-        # The exporter (15 s scrape) must see committed changes that are not delivered.
-        detected = wait_until(lambda: (prom("fleetforge_cdc_missions_behind") or 0) > 0, 90,
-                              2, "stall visible in Prometheus")  # fmt: skip
+        # Stall: the oldest undelivered change keeps ageing (exporter scraped every 15 s).
+        detected = wait_until(lambda: (prom(age) or 0) > 15, 120, 1,
+                              "stall visible in Prometheus")  # fmt: skip
         time.sleep(max(0.0, 20 - (time.monotonic() - killed_at)))
         compose("start", "connect")
         restarted_at = time.monotonic()
@@ -361,12 +365,12 @@ def test_debezium_killed_during_mission_updates_is_detected_and_recovers(stack_d
 
     recovered = wait_until(all_delivered, 240, 1, "every mission delivered downstream")
     downtime = restarted_at - killed_at
-    wait_until(lambda: prom("fleetforge_cdc_missions_behind") == 0, 60, 2, "metric back to 0")
+    wait_until(lambda: prom("fleetforge_cdc_missions_behind") == 0, 90, 2, "metric back to 0")
     record_property("cdc_outage_s", round(downtime, 1))
     record_property("cdc_stall_detected_after_s", round(detected, 1))
     record_property("cdc_recovery_after_restart_s", round(recovered, 1))
     record_property("missions_committed", len(mids))
-    print(f"\nkilled {downtime:.0f}s; stall visible after {detected:.0f}s; all {len(mids)} "
+    print(f"\nkilled {downtime:.0f}s; undelivered age > 15 s after {detected:.0f}s; all {len(mids)} "
           f"missions delivered {recovered:.0f}s after restart")  # fmt: skip
     assert all(r.src == 3 for r in rows)  # ASSIGNED -> RUNNING -> COMPLETED, nothing lost
     c.close()
