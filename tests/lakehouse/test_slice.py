@@ -105,6 +105,16 @@ def _ingest(spark, run: int) -> int:
     return bj.append_bronze(spark, df, ranges, props)
 
 
+def _ingest_reference(spark) -> int:
+    """Only the firmware CDC and robot outbox records of run 1 (for Kafka-sourced tests)."""
+    run_id, at = fx.RUNS[1]
+    recs = [s.record for s in fx.scenario() if s.run == 1 and s.record.topic != TELEMETRY_TOPIC]
+    df = bj.to_bronze(_kafka_df(spark, recs), fx.TOPIC_IDS, run_id, at)
+    ranges = [OffsetRange(r.topic, fx.TOPIC_IDS[r.topic], r.partition, r.offset, r.offset + 1)
+              for r in recs]  # fmt: skip
+    return bj.append_bronze(spark, df, ranges, {})
+
+
 def _archive(spark):
     rows = []
     for a in fx.schema_archive():
@@ -201,6 +211,104 @@ def test_bronze_checkpoint_walks_past_maintenance_snapshots(spark, clean_lake):
     cps = bj.read_checkpoints(spark, fx.TOPIC_IDS)
     assert cps[TELEMETRY_TOPIC].next_offsets == {0: 17, 1: 6}
     assert len(snapshots(spark, BRONZE_KAFKA_RECORDS)) >= 2
+
+
+def test_spark_outcomes_match_every_scenario_expectation(spark, clean_lake):
+    """Every Bronze telemetry record, checked against what the scenario says it must
+    become (not against the reference implementation)."""
+    ensure_tables(spark, [BRONZE_KAFKA_RECORDS, BRONZE_REGISTRY_SCHEMAS])
+    _ingest(spark, 1)
+    _ingest(spark, 2)
+    _archive(spark)
+    sj.build_silver(spark)
+    outcomes = {
+        _key(o): o
+        for o in _collect(spark.table(fq(SILVER_TELEMETRY_RECORD_OUTCOMES)), OUTCOME_COLUMNS)
+    }
+    events = {_key(e): e for e in _collect(spark.table(fq(SILVER_TELEMETRY_EVENTS)), EVENT_COLUMNS)}
+    expected = {(fx.TOPIC_IDS[TELEMETRY_TOPIC], s.record.partition, s.record.offset): s.expect
+                for s in fx.scenario() if s.expect is not None}  # fmt: skip
+    assert set(outcomes) == set(expected)  # one outcome per Bronze record, none lost
+    for key, exp in expected.items():
+        o = outcomes[key]
+        assert (o["outcome"], o["reason_code"]) == (exp.outcome, exp.reason), (key, exp.note)
+        assert (o["superseded_by"] is not None) == exp.superseded, (key, exp.note)
+        if exp.outcome == "ACCEPTED":
+            e = events[key]
+            assert e["arrived_out_of_order"] is exp.out_of_order, (key, exp.note)
+            assert tuple(e["quality_flags"]) == exp.flags, (key, exp.note)
+            assert e["is_current"] is (not exp.superseded), (key, exp.note)
+        else:
+            assert key not in events, (key, exp.note)
+
+
+class Crash(RuntimeError):
+    pass
+
+
+def _crash_at(where):
+    def fault(stage):
+        if stage == where:
+            raise Crash(stage)
+
+    return fault
+
+
+def test_bronze_crash_before_commit_restarts_without_loss_or_duplicates(spark, clean_lake):
+    ensure_tables(spark, [BRONZE_KAFKA_RECORDS])
+    before = current_snapshot_id(spark, BRONZE_KAFKA_RECORDS)
+    original = bj.append_bronze
+    try:
+        bj.append_bronze = lambda *a, **k: original(*a, **k, fault=_crash_at("before_commit"))
+        with pytest.raises(Crash):
+            _ingest(spark, 1)
+    finally:
+        bj.append_bronze = original
+    assert current_snapshot_id(spark, BRONZE_KAFKA_RECORDS) == before  # nothing visible
+    assert spark.table(fq(BRONZE_KAFKA_RECORDS)).count() == 0
+    expected = len([s for s in fx.scenario() if s.run == 1])
+    assert _ingest(spark, 1) == expected  # the restart ingests everything once
+    assert _ingest(spark, 1) == 0  # and a second restart adds nothing
+    assert spark.table(fq(BRONZE_KAFKA_RECORDS)).count() == expected
+
+
+def test_silver_crash_between_tables_is_detectable_and_heals_on_restart(spark, clean_lake):
+    ensure_tables(spark, [BRONZE_KAFKA_RECORDS, BRONZE_REGISTRY_SCHEMAS])
+    _ingest(spark, 1)
+    _archive(spark)
+    first = sj.build_silver(spark)
+    _ingest(spark, 2)
+    with pytest.raises(Crash):
+        sj.build_silver(spark, fault=_crash_at("before_events"))
+    # The documented window: outcomes are already the new build, events still the old.
+    out_ids = {
+        r[0]
+        for r in spark.sql(
+            f"SELECT DISTINCT silver_build_id FROM {fq(SILVER_TELEMETRY_RECORD_OUTCOMES)}"
+        ).collect()
+    }
+    ev_ids = {
+        r[0]
+        for r in spark.sql(
+            f"SELECT DISTINCT silver_build_id FROM {fq(SILVER_TELEMETRY_EVENTS)}"
+        ).collect()
+    }
+    assert ev_ids == {first["build_id"]} and out_ids != ev_ids  # readers can tell
+    healed = sj.build_silver(spark)  # the published build differs, so the restart rebuilds
+    assert healed["status"] == "built"
+    out_ids = {
+        r[0]
+        for r in spark.sql(
+            f"SELECT DISTINCT silver_build_id FROM {fq(SILVER_TELEMETRY_RECORD_OUTCOMES)}"
+        ).collect()
+    }
+    ev_ids = {
+        r[0]
+        for r in spark.sql(
+            f"SELECT DISTINCT silver_build_id FROM {fq(SILVER_TELEMETRY_EVENTS)}"
+        ).collect()
+    }
+    assert out_ids == ev_ids == {healed["build_id"]}
 
 
 def test_late_batch_creates_a_new_version_and_the_old_one_stays_readable(spark, clean_lake):

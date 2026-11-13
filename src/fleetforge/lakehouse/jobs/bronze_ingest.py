@@ -28,7 +28,7 @@ import json
 import logging
 import sys
 import uuid
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -169,7 +169,8 @@ def observed_ranges(df: DataFrame) -> dict[tuple[str, int], tuple[int, int, int]
 
 
 def append_bronze(spark: SparkSession, rows: DataFrame, ranges: list[OffsetRange],
-                  properties: dict[str, str]) -> int:  # fmt: skip
+                  properties: dict[str, str],
+                  fault: Callable[[str], None] = lambda stage: None) -> int:  # fmt: skip
     """Insert-if-absent append with the checkpoint in the same commit. Returns the
     number of new rows. Shared by the Kafka path and the fixture-driven tests."""
     from pyspark.sql import Window
@@ -191,6 +192,7 @@ def append_bronze(spark: SparkSession, rows: DataFrame, ranges: list[OffsetRange
     writer = new.writeTo(target)
     for k, v in properties.items():
         writer = writer.option(f"snapshot-property.{k}", v)
+    fault("before_commit")  # tests: a crash after reading and planning, before the commit
     # Also when count == 0: the commit still records the checkpoint (otherwise a fully
     # replayed range would be planned again). Whether Iceberg commits an empty append
     # is checked by tests/lakehouse; merge_checkpoints() covers it if it does not.
@@ -213,7 +215,9 @@ def read_checkpoints(spark: SparkSession, topics: Iterable[str]) -> dict:
     return merge_checkpoints(committed, derived)
 
 
-def archive_schemas(spark: SparkSession, run_id: str, registry_url: str) -> int:
+def archive_schemas(
+    spark: SparkSession, run_id: str, registry_url: str, topics: list[str] | None = None
+) -> int:
     """Archive every schema id referenced by Bronze Avro topics and not yet archived.
     Raises RegistryUnavailable (retry later) rather than guessing."""
     from pyspark.sql import functions as F
@@ -223,7 +227,7 @@ def archive_schemas(spark: SparkSession, run_id: str, registry_url: str) -> int:
     from fleetforge.kafka.codec import RegistryUnavailable, _registry_down
     from fleetforge.kafka.schemas import registry_client, subject_for
 
-    avro_topics = [t for t, s in SOURCES.items() if s.avro]
+    avro_topics = topics or [t for t, s in SOURCES.items() if s.avro]
     wanted = (
         spark.table(fq(BRONZE_KAFKA_RECORDS))
         .where(F.col("source_topic").isin(avro_topics) & F.col("value_schema_id").isNotNull())

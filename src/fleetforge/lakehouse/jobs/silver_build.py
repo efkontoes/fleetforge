@@ -299,7 +299,12 @@ def write_replace(spark: SparkSession, df: DataFrame, table: Table, props: dict[
     writer.overwrite(F.lit(True))  # all rows replaced, one atomic snapshot
 
 
-def build_silver(spark: SparkSession, bronze_snapshot: int | None = None) -> dict[str, Any]:
+def build_silver(
+    spark: SparkSession,
+    bronze_snapshot: int | None = None,
+    fault: Callable[[str], None] = lambda stage: None,
+    telemetry_topic: str = TELEMETRY_TOPIC,
+) -> dict[str, Any]:
     from pyspark.sql import functions as F
 
     ensure_tables(spark, SILVER_TABLES)
@@ -308,7 +313,7 @@ def build_silver(spark: SparkSession, bronze_snapshot: int | None = None) -> dic
         return {"status": "empty-bronze"}
     bronze = spark.sql(f"SELECT * FROM {fq(BRONZE_KAFKA_RECORDS)} VERSION AS OF {int(snap)}")
     archive = [r.asDict() for r in spark.table(fq(BRONZE_REGISTRY_SCHEMAS)).collect()]
-    telemetry = bronze.where(F.col("source_topic") == TELEMETRY_TOPIC)
+    telemetry = bronze.where(F.col("source_topic") == telemetry_topic)
     ids = {r[0] for r in telemetry.where(F.col("value_framing") == CONFLUENT)
            .select("value_schema_id").distinct().collect()}  # fmt: skip
     missing = sorted(ids - {int(a["schema_id"]) for a in archive})
@@ -340,6 +345,7 @@ def build_silver(spark: SparkSession, bronze_snapshot: int | None = None) -> dic
     for rows, table in ((fw, SILVER_FIRMWARE_CONTRACTS), (robots, SILVER_ROBOT_REGISTRY)):
         write_replace(spark, spark.createDataFrame(rows, table.spark_schema()), table, props)
     write_replace(spark, outcomes, SILVER_TELEMETRY_RECORD_OUTCOMES, props)
+    fault("before_events")  # tests: a crash between the two table commits
     write_replace(spark, events, SILVER_TELEMETRY_EVENTS, props)  # last: publishes the build
     return {"status": "built", "build_id": bid, "bronze_snapshot": snap,
             "reference_anomalies": len(ref.anomalies),
