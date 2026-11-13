@@ -29,7 +29,7 @@ lake-test: lake-up  ## Spark slice tests against the disposable test catalog (~1
 	$(LAKE) --profile jobs run --rm \
 	  -e FLEETFORGE_LAKEHOUSE_CATALOG_JDBC_URL=jdbc:postgresql://catalog-db:5432/iceberg_catalog_test \
 	  -e FLEETFORGE_LAKEHOUSE_WAREHOUSE=s3://lakehouse/test-warehouse \
-	  spark -m pytest -p no:cacheprovider tests/lakehouse -m "lakehouse and not lakehouse_kafka and not lakehouse_trino" -v \
+	  spark -m pytest -p no:cacheprovider --rootdir=/workspace /workspace/tests/lakehouse -m "lakehouse and not lakehouse_kafka and not lakehouse_trino" -v \
 	  -o junit_family=legacy --junitxml=/evidence/junit-spark.xml
 
 lake-query: lake-up  ## Trino on :8090 (~1.4 GiB; Spark must not be running)
@@ -37,7 +37,7 @@ lake-query: lake-up  ## Trino on :8090 (~1.4 GiB; Spark must not be running)
 
 lake-test-trino: lake-query  ## Trino reads what lake-test left (no JVM in the test process)
 	$(LAKE) --profile jobs run --rm --no-deps \
-	  spark -m pytest -p no:cacheprovider tests/lakehouse -m lakehouse_trino -v \
+	  spark -m pytest -p no:cacheprovider --rootdir=/workspace /workspace/tests/lakehouse -m lakehouse_trino -v \
 	  -o junit_family=legacy --junitxml=/evidence/junit-trino.xml
 
 lake-test-kafka:  ## Bronze from real Kafka: needs Milestone 2 core (Kafka, registry) up
@@ -45,7 +45,7 @@ lake-test-kafka:  ## Bronze from real Kafka: needs Milestone 2 core (Kafka, regi
 	$(LAKE_KAFKA) --profile jobs run --rm -e FLEETFORGE_LAKEHOUSE_DRIVER_MEMORY=768m \
 	  -e FLEETFORGE_LAKEHOUSE_CATALOG_JDBC_URL=jdbc:postgresql://catalog-db:5432/iceberg_catalog_test \
 	  -e FLEETFORGE_LAKEHOUSE_WAREHOUSE=s3://lakehouse/test-warehouse \
-	  spark -m pytest -p no:cacheprovider tests/lakehouse -m lakehouse_kafka -v \
+	  spark -m pytest -p no:cacheprovider --rootdir=/workspace /workspace/tests/lakehouse -m lakehouse_kafka -v \
 	  -o junit_family=legacy --junitxml=/evidence/junit-kafka.xml
 
 lake-down:  ## stop the lakehouse stack (keeps volumes)

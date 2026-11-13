@@ -29,6 +29,7 @@ x-lakehouse-env: &lakehouse-env
   FLEETFORGE_LAKEHOUSE_S3_ACCESS_KEY: ${LAKEHOUSE_S3_ACCESS_KEY:?}
   FLEETFORGE_LAKEHOUSE_S3_SECRET_KEY: ${LAKEHOUSE_S3_SECRET_KEY:?}
   FLEETFORGE_LAKEHOUSE_DRIVER_MEMORY: 768m
+  FLEETFORGE_LAKEHOUSE_SPARK_MASTER: "local[1]"
 
 services:
   garage:
@@ -87,9 +88,16 @@ services:
       <<: *lakehouse-env
       FLEETFORGE_LAKEHOUSE: "1"
       PYTHONPATH: /workspace/src
+      # glibc otherwise creates up to 8 malloc arenas per core; native allocations
+      # (compression, Arrow) then fragment outside every JVM limit (OOM kill, spec B5).
+      MALLOC_ARENA_MAX: "2"
     volumes: ["../..:/workspace:ro", "../../build/lakehouse-evidence:/evidence"]
-    working_dir: /workspace
-    mem_limit: 1800m
+    # Not /workspace: Milestone 2's settings read ./.env, which holds its secrets
+    # (mode 600) and must stay unreadable to this container (found in CI).
+    working_dir: /home/fleetforge
+    # Budget (measured): JVM heap 768 MB + capped off-heap, Python workers ~0.6 GiB,
+    # pytest driver ~0.4 GiB. Never runs beside Trino.
+    mem_limit: 2048m
     entrypoint: ["python"]
 
   trino:
