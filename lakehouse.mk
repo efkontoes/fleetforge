@@ -39,7 +39,7 @@ lake-test-trino: lake-query  ## Trino reads what lake-test left (no JVM in the t
 
 lake-test-kafka:  ## Bronze from real Kafka: needs Milestone 2 core (Kafka, registry) up
 	LAKE_FORCE=1 $(MAKE) -f lakehouse.mk lake-up
-	$(LAKE_KAFKA) --profile jobs run --rm \
+	$(LAKE_KAFKA) --profile jobs run --rm -e FLEETFORGE_LAKEHOUSE_DRIVER_MEMORY=768m \
 	  -e FLEETFORGE_LAKEHOUSE_CATALOG_JDBC_URL=jdbc:postgresql://catalog-db:5432/iceberg_catalog_test \
 	  -e FLEETFORGE_LAKEHOUSE_WAREHOUSE=s3://lakehouse/test-warehouse \
 	  spark -m pytest -p no:cacheprovider tests/lakehouse -m lakehouse_kafka -v
