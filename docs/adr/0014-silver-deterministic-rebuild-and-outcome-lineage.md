@@ -1,6 +1,7 @@
 # ADR 0014 — Silver: a deterministic function of its inputs, with one outcome row per source record
 
-Status: accepted (implemented as code and unit tests; Spark execution deferred).
+Status: accepted; implemented and proven: Spark output equals the Python reference row for
+row, and matches every scenario expectation (spec §8).
 
 ## Context
 Silver must deduplicate, order, convert units, resolve conflicts and corrections,

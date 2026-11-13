@@ -1,6 +1,7 @@
 # ADR 0013 — Bronze ingestion: bounded Kafka batches, checkpoint in the Iceberg commit, insert-if-absent
 
-Status: accepted (implemented as code and unit tests; Spark execution deferred).
+Status: accepted; implemented and proven on Spark 4.1.4, Iceberg 1.12.0, Garage and Kafka
+(spec §8).
 
 ## Context
 Bronze must hold every Kafka record exactly once per identity, survive crashes at
@@ -46,7 +47,8 @@ Iceberg cannot share a transaction.
 * A crash or unknown commit outcome is resolved by re-reading the table: there is
   no second system of record to reconcile.
 * An append whose rows were all present must still advance the checkpoint. Whether
-  Iceberg commits an empty append is checked by the deferred stack test.
+  Iceberg commits an empty append was measured: it does
+  (`empty_append_created_snapshot=True`).
   `merge_checkpoints` makes the design correct either way.
 * Records deleted by compaction before ingestion (compacted CDC topic) are
   unrecoverable: Bronze guarantees latest-per-key for such topics, not full history

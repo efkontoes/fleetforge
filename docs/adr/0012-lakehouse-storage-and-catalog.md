@@ -1,6 +1,7 @@
 # ADR 0012 — Lakehouse storage and catalog: Iceberg on S3-compatible storage, JDBC catalog
 
-Status: accepted for slice 1. **Open decision for the user: MinIO's distribution.**
+Status: accepted for slice 1. **The object-store decision (MinIO from source) is superseded
+by [ADR 0015](0015-object-storage-garage.md) (Garage).** Table format and catalog stand.
 
 ## Context
 Milestone 3 needs versioned analytical tables that Spark writes and Trino reads,

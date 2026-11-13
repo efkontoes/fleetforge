@@ -1,13 +1,14 @@
 # FleetForge — Milestone 3 specification: lakehouse and data transformation
 
-Status: **slice 1 implemented as code and unit tests; Spark, Iceberg, Trino and
-Kafka execution deferred** (see [Deferred execution](#deferred-execution)).
-Branch `milestone-3-lakehouse`, based on `e683d32` (the pushed head of
-`milestone-2-distributed-ingestion`, PR #1), in a separate worktree. Milestone 2's
-working tree, containers, volumes and database were not touched.
+Status: **slice 1 (Kafka -> Bronze -> Silver -> Trino) implemented and proven on the
+real engines**: 61 lakehouse unit tests, 14 Spark/Iceberg and S3 tests, 4 Trino tests
+and 2 real-Kafka tests pass (see [§8](#8-test-execution-and-evidence)). Gold is
+specified, not implemented. Branch `milestone-3-lakehouse`, rebased onto `main` after
+PR #1 merged (`e819779`).
 
 Companion documents: [exact table schemas](milestone-3-tables.md) (generated from
 code), ADRs [0012](../adr/0012-lakehouse-storage-and-catalog.md),
+[0015](../adr/0015-object-storage-garage.md),
 [0013](../adr/0013-bronze-idempotent-ingestion.md),
 [0014](../adr/0014-silver-deterministic-rebuild-and-outcome-lineage.md), and the
 [learning guide](../learning/milestone-3.md).
@@ -20,7 +21,7 @@ datasets:
     Kafka raw telemetry + CDC/outbox streams -> Bronze -> Silver -> Gold -> Trino
 
 In scope: Spark for transformations, Iceberg tables (Parquet files) in
-S3-compatible storage (MinIO), Trino for SQL, Python for validation logic.
+S3-compatible storage (Garage, ADR 0015), Trino for SQL, Python for validation logic.
 Out of scope until later milestones: Airflow, dbt, the LLM assistant. Jobs are
 plain CLI entry points; whatever schedules them later only needs their exit codes.
 
@@ -41,7 +42,7 @@ flowchart LR
     SJ --> S[(silver.telemetry_events<br/>silver.telemetry_record_outcomes<br/>silver.firmware_contracts<br/>silver.robot_registry)]
     S -.slice 3.-> G[(gold.*)]
     CAT[(Iceberg JDBC catalog<br/>PostgreSQL, own instance)]
-    S3[(MinIO: Parquet + Iceberg metadata)]
+    S3[(Garage S3: Parquet + Iceberg metadata)]
     TR[Trino 484]
   end
   T --> BJ
@@ -54,7 +55,7 @@ flowchart LR
 ```
 
 Every table is an Iceberg table: Parquet data files and Iceberg metadata in
-MinIO, one pointer per table in the JDBC catalog. Spark writes, Trino reads,
+Garage, one pointer per table in the JDBC catalog. Spark writes, Trino reads,
 through the same catalog.
 
 ## 3. Milestone 2 contracts, as implemented
@@ -96,6 +97,20 @@ Read from the code at `e683d32`, not from intentions.
 | G10 | Mission events are JSON without a registered schema | Contract lives only in consumer code | Ingested to Bronze as bytes; not modelled in slice 1 | Register a JSON or Avro schema |
 | G11 | Kafka timestamps are CreateTime (producer clock) | `kafka_timestamp` is not a trustworthy arrival time | Stored as metadata only; arrival order uses Bronze ingestion | `message.timestamp.type=LogAppendTime` on the topic |
 | G12 | Telemetry is low-rate scalar state: no images, scans, commands or actions | A learning dataset has no actions or rich observations | Gold product is labelled training-*candidate* | New streams, out of scope for M3 |
+
+### Decisions on the highest-impact gaps
+
+No Milestone 2 code was changed: none of these gaps blocks the vertical slice, and
+each extension below is only justified once its trigger occurs. Nothing is
+fabricated in the meantime.
+
+| Gap | Decision now | Smallest backward-compatible extension | Needed when |
+|---|---|---|---|
+| G1 robot model | `RobotRegistered` from the outbox is the source. Bronze is the permanent archive of `fleet.robot-events.v1` (Kafka keeps 30 days), so a model is never lost once ingested. A missing model is `UNKNOWN_ROBOT`, retry-eligible, never guessed (scenario robot X, tested) | Add `fleet.robots` to the existing reference CDC connector (publication + `table.include.list`): a new compacted topic whose snapshot covers every existing robot; no existing consumer changes | The lakehouse is first deployed against a fleet with registrations older than 30 days |
+| G2 boot registration | `boot_number` is copied and documented as unverified; it only orders events | New outbox event type `BootRegistered` on `fleet.robot-events.v1` in `register_boot` (same transaction) | Before a Gold training release can leave `CANDIDATE` |
+| G3 operator corrections | **Reported as unsupported.** Corrections arriving through Kafka are supported and proven (two corrections, latest wins, superseding a rejected original). Corrections made by `fleet-replay correct` never reach Bronze, so the original stays `REJECTED` with `superseded_by` NULL | `fleet-replay correct` publishes the correction event to `telemetry.raw.v1` (key `robot_id`) instead of applying it directly; the projector then handles it on its normal, idempotent path | Corrections start to be used operationally |
+| G5 coordinate frames | No frame assumed; heading only wrapped into [-π, π); training releases stay `CANDIDATE` | Avro revision with an optional `frame_id` (default NULL): BACKWARD compatible under the registry rule | Positions from more than one site or map are combined |
+| G7, G12 episodes and actions | `episode_id = boot_id`, labelled provisional; no action or target columns are invented | Mission id on telemetry, and a command/action stream (new topics) | A learning task is defined (outside Milestone 3) |
 
 ## 4. Layer design
 
@@ -272,17 +287,18 @@ Action vocabulary: **retry** (no commit happened; rerun is safe), **quarantine**
 | Spark Kafka source | `spark-sql-kafka-0-10_2.13:4.1.4` | Must equal the Spark version | Maven Central |
 | PostgreSQL JDBC | 42.7.14 | Iceberg JDBC catalog driver | Maven Central |
 | Java (Spark) | Temurin 21 JRE `21.0.12.1_1` (digest-pinned) | Spark 4.1 supports 17 and 21 | Docker Hub |
-| Python libs | pandas 2.3.3, pyarrow 25.0.1, trino 0.340.0 | PySpark 4.1.4 declares pandas ≥ 2.2, pyarrow ≥ 15. Resolved together with the project lock on Python 3.12, `pip check` clean (`requirements-lakehouse.lock`) | PyPI metadata; **runtime compatibility not yet executed** |
+| Python libs | pandas 2.3.3, pyarrow 25.0.1, trino 0.340.0 | PySpark 4.1.4 declares pandas ≥ 2.2, pyarrow ≥ 15. Resolved together with the project lock on Python 3.12, `pip check` clean, `pip-audit` clean (`requirements-lakehouse.lock`) | PyPI metadata; runtime verified by the stack tests |
 | Trino | 484 (digest-pinned) | Latest; JDBC catalog; reads Iceberg v1 and v2 (v3 "experimental", so tables pin v2); bundles Java 25 | Trino 484 docs |
 | Catalog DB | PostgreSQL 17 (same digest as M2 tests), separate container | Iceberg JDBC catalog: no extra catalog service on a 3.7 GiB machine | ADR 0012 |
-| Object storage | MinIO `RELEASE.2025-10-15T17-29-55Z` built from source at commit `9e49d5e`, `mc` `RELEASE.2025-08-13T08-35-41Z` | **Upstream archived MinIO and withdrew images** (Docker Hub denies `minio/minio`). Last release fixes GHSA-jjjj-jwhf-8rgr, which the last prebuilt image predates | GitHub API; ADR 0012 (open decision) |
-| Go toolchain (build only) | `golang:1.24.8-bookworm` | The toolchain MinIO's `go.mod` declares | MinIO `go.mod` |
+| Object storage | Garage v2.5.0 (`dxflrs/garage`, digest-pinned), single node | Maintained; 5/5 S3 operations; 43 MiB peak vs SeaweedFS 500 MiB; prebuilt image | ADR 0015 (measured) |
+| AWS SDK v2 setting | `AWS_REQUEST_CHECKSUM_CALCULATION=WHEN_REQUIRED`, `AWS_RESPONSE_CHECKSUM_VALIDATION=WHEN_REQUIRED` on Spark and Trino | Garage rejects the SDK's default trailing upload checksums | Bug B1 below |
+| Spark driver | heap 768 MB; metaspace 320 MB, direct 256 MB, code cache 96 MB caps; container 1.8 GiB | Measured: unbounded off-heap got the JVM OOM-killed | Bug B5 below |
 
 Alternatives considered (details in ADRs): Delta Lake or Hudi instead of Iceberg
 (Iceberg is engine-neutral and Trino's Iceberg support is first-class); a REST
 catalog (Polaris, Lakekeeper, Nessie) instead of JDBC (more realistic for
-production, but one more service); Garage or SeaweedFS instead of MinIO (actively
-maintained; the S3 API keeps the choice reversible); Spark Structured Streaming
+production, but one more service); SeaweedFS, AIStor Free or the archived MinIO
+instead of Garage (ADR 0015); Spark Structured Streaming
 instead of bounded batches (offsets live in a checkpoint directory outside the
 table; batch ranges are explicit and testable); DuckDB or PyIceberg for local
 tests (no JVM, but not the engines this milestone teaches).
@@ -292,44 +308,74 @@ tests (no JVM, but not the engines this milestone teaches).
 | Slice | Content | Acceptance criteria | Status |
 |---|---|---|---|
 | 0 | Isolation, contract inventory, gaps, schemas, versions, failure rules | This document; worktree at `e683d32`; nothing in M2 changed | done |
-| 1a | Pure core: Bronze mapping and planner, reference data, Silver row and set stages, scenario | Every scenario record gets its stated outcome; order independence; bit-identical rebuild; replay inserts nothing; fail-closed planner cases; schema not archived → abort, not quarantine | **done: 58 unit tests pass** |
-| 1b | Spark jobs and lakehouse stack | Spark Bronze columns = Python reference; insert-if-absent on Iceberg; Spark Silver = Python reference (differential); unchanged inputs → no new snapshot; late batch → new build, previous readable by snapshot; checkpoint survives compaction | **code written; 6 Spark tests deferred** |
-| 1c | Trino query | Trino results = reference; time travel; quarantine joins to source bytes; types as documented | **4 Trino tests deferred** |
-| 1d | Real Kafka source | ingest, replay, topic recreation refused, against a dedicated topic | **1 test deferred** |
+| 1a | Pure core: Bronze mapping and planner, reference data, Silver row and set stages, scenario | Every scenario record gets its stated outcome; order independence; bit-identical rebuild; replay inserts nothing; fail-closed planner cases; schema not archived → abort, not quarantine | **done: 61 unit tests pass** |
+| 1b | Spark jobs and lakehouse stack | Spark Bronze columns = Python reference; insert-if-absent on Iceberg; Spark Silver = Python reference (differential); unchanged inputs → no new snapshot; late batch → new build, previous readable by snapshot; checkpoint survives compaction | **done: 9 Spark tests pass (incl. scenario check and two crash-restart tests)** |
+| 1c | Trino query | Trino results = reference; time travel; quarantine joins to source bytes; types as documented | **done: 4 Trino tests pass** |
+| 1d | Real Kafka source | ingest, replay, topic recreation refused; Avro with real registry ids to Silver | **done: 2 Kafka tests pass** |
 | 2 | Incremental Silver | Process only new Bronze snapshots (Iceberg incremental read), MERGE by identity with per-robot state; **equals the full rebuild** on randomized scenarios; compaction and snapshot expiry jobs | planned |
 | 3 | Gold products | Both products built from a pinned Silver build; changed-days recomputation; release table with content hash; training-readiness checks reported, release stays CANDIDATE | planned |
 | 4 | Operations | Scheduling entry points, metrics (lag Bronze vs Kafka, rejection rates), reconciliation M2 quarantine vs Silver outcomes, retention policy (Bronze kept beyond Kafka's 7 days), runbook | planned |
 
-## Deferred execution
+## 8. Test execution and evidence
 
-Nothing below has run. It needs the machine without the Milestone 2 stack
-(3.7 GiB WSL; the 11 running Milestone 2 containers used 1.8 GiB by `docker stats` at the
-start of this work, with 0.7 GiB left available and swap full). Memory figures are container
-**limits** from `infrastructure/lakehouse/compose.yaml`, not measurements.
+Executed 2026-11-13 on the 3.7 GiB WSL machine with the Milestone 2 stack stopped,
+one phase at a time. JUnit XML: `docs/reviews/evidence/milestone-3/`. CI runs the
+same phases (`.github/workflows/lakehouse.yml`).
 
-| Phase | Command | Needs | Limits | Verifies |
+| Phase | Command | Running services | Result | Peak memory (measured) |
 |---|---|---|---|---|
-| 0 | `sh scripts/make-lakehouse-env.sh && make -f lakehouse.mk lake-build` | network; M2 stack down (Go compile of MinIO estimated at 1.5–3 GiB) | build only | MinIO builds from the pinned commit; Spark image installs the lock; Ivy resolves the 4 packages; JRE runs in the Python base |
-| 1 | `make -f lakehouse.mk lake-test` | MinIO, catalog DB, Spark | 0.38 + 0.25 + 1.6 GiB | 6 Spark tests (slice 1b), including the open question whether Iceberg commits an empty append (`empty_append_created_snapshot` in the JUnit properties) |
-| 2 | `make -f lakehouse.mk lake-test-trino` | MinIO, catalog DB, Trino; Spark stopped | 0.63 + 1.4 GiB | 4 Trino tests (slice 1c) on the tables phase 1 left |
-| 3 | M2: `docker compose --profile core up -d --wait kafka schema-registry` (and the dependencies Compose starts with them, nothing else), then `make -f lakehouse.mk lake-test-kafka` | M2 Kafka and registry, lakehouse, Spark | ≈ 3.4 GiB of limits; actual use lower; the target sets the driver to 768m | 1 Kafka test (slice 1d): creates and deletes its own topic only |
-| 4 | `make -f lakehouse.mk lake-down` | — | — | — |
+| unit | `.venv/bin/pytest tests/unit tests/integration tests/failure tests/lakehouse` | Testcontainers PostgreSQL | **247 passed, 20 skipped** (87 M2 unit + 61 lakehouse unit + 93 integration + 6 failure; the 20 skips are the stack tests below) | — |
+| 0 | `make -f lakehouse.mk lake-build` | — | Spark image 885 MB; Ivy resolved the 4 packages (15 jars); the JRE runs in the Python base | — |
+| 1 | `make -f lakehouse.mk lake-test` | Garage, catalog DB, Spark | **14 passed** (5 S3 conformance + 9 Spark/Iceberg), 179 s | JVM 1,280 MiB, Python workers 586 MiB, pytest 368 MiB (per-process peaks); no OOM kill |
+| 2 | `make -f lakehouse.mk lake-test-trino` | Garage, catalog DB, Trino | **4 passed**, 12 s | Trino 1.0 GiB |
+| 3 | M2: `docker compose --profile core up -d --wait kafka schema-registry`; `make -f lakehouse.mk lake-test-kafka` | + M2 Kafka and registry only | **2 passed**, 105 s; test topics and subjects deleted afterwards | Kafka 390 MiB, registry 282 MiB, Spark 1.63 GiB |
 
-Record for each phase: JUnit XML (`--junitxml`), `docker stats` peaks, image
-digests built, and any deviation. Expect first-run fixes in the Spark code paths
-the unit tests cannot reach: pandas/Arrow conversion in `row_stage`, struct
-comparison in the out-of-order window, empty-append behaviour, Trino health timing.
+Not run: Milestone 2's 25 live-stack tests (`tests/stack`), which need its full
+stack; this branch changes no Milestone 2 runtime code.
+
+### Guarantees and the tests that prove them
+
+| Guarantee | Evidence |
+|---|---|
+| Bronze preserves raw records and coordinates | `test_spark_bronze_columns_equal_the_python_reference` (every column of every record, Spark vs reference); `test_quarantine_joins_back_to_the_exact_source_bytes` (Trino) |
+| Replay does not duplicate Bronze records | `test_bronze_append_is_insert_if_absent_and_carries_the_checkpoint`; `test_ingest_replay_and_recreation_against_real_kafka` |
+| Deterministic validation and deduplication | `test_spark_silver_equals_the_python_reference` (row for row); `test_rebuild_with_unchanged_inputs_is_a_no_op` (same build id, no new snapshot) |
+| Every result matches the scenario | `test_spark_outcomes_match_every_scenario_expectation`; `test_kafka_avro_with_real_registry_ids_to_silver` (same, from real Kafka bytes with real registry ids) |
+| Late arrivals per policy | `test_late_batch_creates_a_new_version_and_the_old_one_stays_readable`; out-of-order flags in the scenario check |
+| Invalid records identifiable and traceable | one outcome row per Bronze record with reason and JSON errors; Trino join back to the exact bytes |
+| Corrections | Kafka-borne: supersession, latest wins (scenario). Operator corrections: unsupported, reported (G3) |
+| Reproducible queries by snapshot | `VERSION AS OF` in Spark and `FOR VERSION AS OF` in Trino return the previous build |
+| Trino reads the same committed versions | `test_current_version_matches_the_reference`, `test_previous_version_is_readable_by_snapshot` (build id from the snapshot summary) |
+| Safe restart after a failed job | `test_bronze_crash_before_commit_restarts_without_loss_or_duplicates`; `test_silver_crash_between_tables_is_detectable_and_heals_on_restart`; checkpoint walk past compaction |
+| Schemas archived from the real registry | 2 FOUND + 1 authoritative NOT_FOUND, idempotent (Kafka test) |
+| Iceberg commits an empty append | yes (`empty_append_created_snapshot=True`) |
+
+### Bugs found by the first executions
+
+| # | Symptom | Root cause | Fix |
+|---|---|---|---|
+| B1 | Every Iceberg metadata write: `InvalidRequestException: Invalid payload signature (400)` | AWS SDK v2 (Iceberg's aws bundle, also Trino) sends uploads aws-chunked with a trailing checksum by default; Garage v2.5.0 rejects that signature form. The pyarrow probe passed because the C++ SDK does not do this | `AWS_REQUEST_CHECKSUM_CALCULATION` / `AWS_RESPONSE_CHECKSUM_VALIDATION = WHEN_REQUIRED` on Spark and Trino; reproduced both ways first; pinned by a unit test |
+| B2 | Bronze append: `PLAN_VALIDATION_FAILED_RULE_IN_BATCH` (CollapseProject) | Spark 4.1.4 optimizer: `dropDuplicates` plus Iceberg's write projection yields an unresolved plan (the same plan counts fine); isolated with four plan variants | `row_number()` window over the identity (same "first copy wins") |
+| B3 | `lake-guard` would refuse the lakehouse's own second command | It matched every container name starting `fleetforge-`, including `fleetforge-lakehouse-*` | Exclude the lakehouse project |
+| B4 | Real Kafka: `illegal topic id '0/lHs2ReR2i9LwLnxKhAcg'` | librdkafka prints topic ids in standard base64 (`+`, `/`); the check assumed the URL-safe alphabet of Java clients | Accept both alphabets; quotes and backslashes still refused; unit test with the real id |
+| B5 | `Py4JNetworkError` mid-run; kernel: `Memory cgroup out of memory: Killed process (java)` at 1.35 GB RSS | Off-heap regions (metaspace, direct buffers, code cache, GC threads) are not bounded by the heap; with a 1 GB heap the JVM plus Python workers exceeded the container limit late in a long session | Explicit off-heap caps, heap 768 MB, container 1.8 GiB; per-process breakdown measured above |
+
+Concerns that did **not** materialise: pandas/Arrow conversion in `mapInPandas`,
+struct comparison in the out-of-order window, Iceberg JDBC catalog initialisation,
+path-style S3 addressing, and Trino reading Spark-written metadata all worked on the
+first execution.
 
 ## Integration with Milestone 2
 
+* Rebased onto `main` after PR #1 merged (`e819779`); the pre-rebase head is kept as
+  tag `m3-pre-rebase-83b2dac`. Milestone 2's final commits changed no contract
+  surface, so the gaps above still hold.
 * Milestone 3 changes no Milestone 2 file except additive lines in `pyproject.toml`
-  (an extra, two markers, one lint rule) and `.gitignore`. Its Makefile targets live
-  in `lakehouse.mk`.
+  (an extra, markers, one lint rule) and `.gitignore`. Its Makefile targets live in
+  `lakehouse.mk`; its CI in `.github/workflows/lakehouse.yml`.
 * It reuses Milestone 2 code read-only: `observation_from_record`,
   `check_semantics`, `identity_hints`, `payload_for_audit`, `json_safe`, `REASONS`,
-  `schema_str`, and two private helpers (`kafka.codec._registry_down`,
-  `kafka.offsets.topic_id`). Milestone 2's in-flight work modifies `codec.py`,
-  `offsets.py` and `errors.py`, so after PR #1 merges, rebase this branch onto
-  `main` (`git rebase --onto main e683d32 milestone-3-lakehouse`), rerun
-  `pytest tests/unit`, and check those names first.
-* Unverified Milestone 2 changes are never cherry-picked into this branch.
+  `schema_str`, `register`, and two private helpers (`kafka.codec._registry_down`,
+  `kafka.offsets.topic_id`).
+* The Kafka test phase uses only Milestone 2's `kafka` and `schema-registry`
+  services, with dedicated topics and subjects it deletes afterwards.

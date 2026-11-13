@@ -1,14 +1,12 @@
 # Milestone 3 — lakehouse engineering, explained with our own code
 
-Twelve concepts in the same shape as the Milestone 2 guide: the **problem**, the
+Twelve concepts, plus lessons from the first real run, in the same shape as the Milestone 2 guide: the **problem**, the
 **mechanism**, **ours** (with file names), what it **guarantees** and what it
 **does not**, **alternatives**, and how we **verify** it.
 
-Status matters for reading this: the pure Python parts run in unit tests today.
-The Spark, Iceberg and Trino parts are written but run only once the lakehouse
-stack can start (see "Deferred execution" in
-[the spec](../architecture/milestone-3.md)). Where a claim depends on running
-Spark, the guide says so.
+Everything named "verify" below has run: the pure parts in unit tests, the
+engine parts in the staged stack tests (spec §8). Section 13 is what the first real
+run taught us that the unit tests could not.
 
 Try the pure parts now:
 ```bash
@@ -80,7 +78,7 @@ one JVM; `spark.sql.shuffle.partitions=4` avoids 200 tiny tasks.
 are fully ordered by the unique arrival key. **Does not:** guarantee row *order*
 in the output, or bound memory per key (a hot key is still one task).
 
-**Verify.** Deferred: `test_spark_silver_equals_the_python_reference` (Spark
+**Verify.** `test_spark_silver_equals_the_python_reference` (Spark
 output equals `silver.build()`).
 
 ## 3. Parquet: columnar files and why our sort order matters
@@ -108,8 +106,8 @@ tiny files (statistics overhead dominates; compaction fixes it, slice 2).
 Kafka messages, wrong for analytics). Kafka uses Avro; the lakehouse uses Parquet.
 Each fits its access pattern.
 
-**Verify.** Deferred: `EXPLAIN` of the anti-join, and Iceberg's `files` metadata
-table (`lower_bounds`, `upper_bounds`) after `test_bronze_append_...`.
+**Try it.** `EXPLAIN` the anti-join, and read Iceberg's `files` metadata table
+(`lower_bounds`, `upper_bounds`) after an ingest. (An exercise, not a test.)
 
 ## 4. Iceberg: what a "table" is when it is only files
 
@@ -141,7 +139,7 @@ the catalog. Spark (`jobs/common.spark_conf`) and Trino
 failed writer leaves the table unchanged. **Does not:** enforce primary keys, or
 commit across tables.
 
-**Verify.** Deferred: `test_rebuild_with_unchanged_inputs_is_a_no_op` (no new
+**Verify.** `test_rebuild_with_unchanged_inputs_is_a_no_op` (no new
 snapshot), plus F1, F7 and F11 in the spec as manual drills.
 
 ## 5. Snapshots: time travel, and a checkpoint that cannot disagree with the data
@@ -165,7 +163,7 @@ not:** survive snapshot expiry by itself. That is why `merge_checkpoints` also
 derives a checkpoint from the data.
 
 **Verify.** `test_checkpoint_survives_maintenance_snapshots_and_replays` (unit);
-deferred `test_bronze_checkpoint_walks_past_maintenance_snapshots` (real
+`test_bronze_checkpoint_walks_past_maintenance_snapshots` (real
 compaction).
 
 ## 6. Partitioning: hidden, transformed, and chosen for the queries
@@ -195,7 +193,7 @@ files on our tiny test data (one file per partition per write); compaction is
 slice 2.
 
 **Verify.** `test_table_specs_are_internally_consistent` (transforms reference real
-columns); deferred `EXPLAIN` on a day filter.
+columns). Try it: `EXPLAIN` a query with a day filter.
 
 ## 7. Upserts: MERGE, copy-on-write, merge-on-read, and why slice 1 does neither
 
@@ -219,7 +217,7 @@ at commit time (isolation level). **Does not:** deduplicate the *source*. If the
 source holds two rows for one key, MERGE fails or produces duplicates, which is
 why Silver's set stage resolves duplicates *before* any merge.
 
-**Verify.** `test_replaying_a_batch_inserts_nothing` (unit), deferred
+**Verify.** `test_replaying_a_batch_inserts_nothing` (unit),
 `test_bronze_append_is_insert_if_absent_and_carries_the_checkpoint`.
 
 ## 8. Schema evolution, twice: Avro in Kafka, Iceberg in the lake
@@ -320,15 +318,18 @@ the job with itself proves nothing.
 2. **Invariants and properties**: reconciliation (one outcome per record),
    identity uniqueness, order independence (shuffled input gives identical output),
    bit-identical rebuilds, one current version per ordering slot.
-3. **Differential tests** (deferred): Spark output must equal the pure reference
+3. **Differential tests**: Spark output must equal the pure reference
    implementation on the same input. Error strings come from shared templates
    (`template_sql`) so the two can match byte for byte, and
    `test_spark_error_templates_render_exactly_the_python_strings` checks the SQL
    rendering without a JVM.
 
-**What unit tests cannot prove**, and is therefore deferred: pandas/Arrow type
+**What unit tests could not prove**, and the stack tests then did: pandas/Arrow
 conversion in `mapInPandas`, Spark's struct comparison in the out-of-order window,
-whether Iceberg commits an empty append, and Trino reading Spark-written metadata.
+that Iceberg commits an empty append (it does), and that Trino reads Spark-written
+metadata. Add the fourth layer, **failure injection**: fault hooks crash Bronze
+before its commit and Silver between its two table writes, and the tests prove that
+the restart repairs everything.
 
 ## 12. Trino: one catalog, a different engine
 
@@ -359,5 +360,32 @@ SELECT committed_at, summary['fleetforge.silver.build-id'] FROM silver."telemetr
 filter both on `silver_build_id`. Trino 484's Iceberg v3 support is experimental,
 which is why tables pin format v2.
 
-**Verify.** Deferred `tests/lakehouse/test_trino.py`: results equal the reference,
+**Verify.** `tests/lakehouse/test_trino.py`: results equal the reference,
 time travel, types as documented.
+
+## 13. What the first real run taught us
+
+Five failures, none visible to the unit tests (spec §8 has the full table).
+
+* **"S3-compatible" is not "Iceberg-compatible".** A pyarrow probe passed every S3
+  operation on Garage, yet every Iceberg metadata write failed with *Invalid
+  payload signature*. The AWS SDK v2 inside Iceberg (and Trino) sends uploads with a
+  trailing checksum by default, a newer wire format that Garage rejects. Lesson:
+  test with the client the engine actually uses. Fix: checksums only where S3
+  requires them (`AWS_REQUEST_CHECKSUM_CALCULATION=WHEN_REQUIRED`).
+* **Optimizers have bugs too.** `dropDuplicates` before an Iceberg append made Spark
+  4.1.4 produce an invalid plan, while the same DataFrame counted fine. Isolating it
+  took four variants of the plan. The fix expresses the same rule ("first copy
+  wins") as a window, which the optimizer handles.
+* **The JVM heap is not the JVM's memory.** With a 768 MB heap the driver reached
+  1.35 GB RSS and the container's cgroup killed it (`dmesg` showed it). Metaspace,
+  direct buffers, code cache and GC threads live outside the heap, and Python
+  `mapInPandas` workers add their own memory. Measured per process: JVM 1,280 MiB,
+  Python workers 586 MiB, test driver 368 MiB. Cap every region and size the
+  container for the sum.
+* **Identifiers have more than one spelling.** Kafka topic ids printed by librdkafka
+  use standard base64 (`+`, `/`); Java clients print URL-safe base64. A validator
+  written from the Java form rejected the real broker's id.
+* **Your own guard can block you.** A check "no `fleetforge-*` containers running"
+  also matched the lakehouse's `fleetforge-lakehouse-*` containers.
+
