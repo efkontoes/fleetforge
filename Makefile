@@ -2,7 +2,8 @@ PY := .venv/bin/python
 SEED ?= 42
 
 .PHONY: help setup env up up-core up-processing up-cdc up-full down migrate test test-unit \
-        test-stack test-stack-disruptive lint fmt sim publish bench bench-m2 backup-check dashboard
+        test-stack test-stack-disruptive lint fmt sim publish bench bench-m2 bench-traced \
+        backup-check dashboard up-bench
 
 help:  ## list targets
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-22s %s\n", $$1, $$2}'
@@ -70,6 +71,17 @@ bench:  ## Milestone 1 HTTP benchmark
 
 bench-m2:  ## Milestone 2 drain sweep (see benchmarks/milestone-2-report.md)
 	$(PY) benchmarks/m2_benchmark.py drain --modes per_event:1 loop:500 set:50 set:500
+
+RATE ?= 5000
+DURATION ?= 300
+
+up-bench:  ## benchmark profile: core only (stops CDC, observability, compose projector)
+	docker compose --profile full stop connect mission-consumer projector \
+	  prometheus grafana kafka-exporter ops-exporter
+	docker compose --profile core up -d --wait
+
+bench-traced:  ## per-hop traced sustained run, e.g. make bench-traced RATE=5000 DURATION=300
+	$(PY) benchmarks/m2_traced.py --rate $(RATE) --seconds $(DURATION) --label make
 
 backup-check:  ## pg_dump + restore drill into a scratch database
 	sh scripts/backup-restore-check.sh

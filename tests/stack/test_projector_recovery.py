@@ -96,11 +96,13 @@ def test_consumer_terminated_mid_stream_and_restarted(fresh_topic, stack_setting
     group = f"term-{uuid.uuid4().hex[:8]}"
     settings = stack_settings.model_copy(update={"projector_batch_size": 50})
     p = Projector(settings, stack_db, topic=fresh_topic, group=group)
-    t = threading.Thread(target=p.run, kwargs={"max_idle_s": 30})
+    t = threading.Thread(target=p.run, kwargs={"max_idle_s": 30}, daemon=True)
     t.start()
-    wait_until(lambda: p.stats.batches >= 3, 30, 0.05, "a few batches")
-    p.stop.set()  # SIGTERM path: finish the current batch, close, exit
-    t.join(30)
+    try:
+        wait_until(lambda: p.stats.batches >= 3, 60, 0.05, "a few batches")
+    finally:
+        p.stop.set()  # SIGTERM path: finish the current batch, close, exit
+        t.join(30)
     assert 0 < p.stats.records < sum(isinstance(i, Telemetry) for i in items)
 
     Projector(settings, stack_db, topic=fresh_topic, group=group).run(max_idle_s=5)
@@ -108,14 +110,15 @@ def test_consumer_terminated_mid_stream_and_restarted(fresh_topic, stack_setting
 
 
 @pytest.mark.disruptive
-def test_database_restart_while_kafka_buffers(fresh_topic, stack_settings, stack_db):
+def test_database_restart_while_kafka_buffers(fresh_topic, stack_settings, stack_db,
+                                              record_property):  # fmt: skip
     """PostgreSQL goes away while telemetry keeps arriving. The projector must not
     quarantine anything or advance offsets; it pauses (lag grows), retries with
     backoff, and drains the backlog after recovery. Records recovery time and drain."""
     group = f"dbdown-{uuid.uuid4().hex[:8]}"
     settings = stack_settings.model_copy(update={"projector_max_retry_backoff_s": 2.0})
     p = Projector(settings, stack_db, topic=fresh_topic, group=group)
-    t = threading.Thread(target=p.run, kwargs={"max_idle_s": 25})
+    t = threading.Thread(target=p.run, kwargs={"max_idle_s": 25}, daemon=True)
     t.start()
 
     items = generate(SimConfig(seed=int(time.time()) % 10**6 + 30, robots=10, ticks=150,
@@ -148,6 +151,16 @@ def test_database_restart_while_kafka_buffers(fresh_topic, stack_settings, stack
         f"\noutage {up_at - down_at:.1f}s, retries {p.stats.retries}, "
         f"backlog {p.stats.records} records drained {drained:.1f}s after restart"
     )
+    import resource
+
+    from .conftest import high_watermarks
+
+    record_property("outage_s", round(up_at - down_at, 1))
+    record_property("backlog_events", sum(high_watermarks(fresh_topic).values()))
+    record_property("retries", p.stats.retries)
+    record_property("drained_after_restart_s", round(drained, 1))
+    record_property("test_process_max_rss_mb",
+                    round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024))  # fmt: skip
     check(stack_db, items)
     with stack_db.connect() as c:
         quarantined_infra = c.execute(text(

@@ -15,10 +15,12 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
+from confluent_kafka import KafkaError, KafkaException
 from confluent_kafka.admin import AdminClient, NewTopic
 from sqlalchemy import Engine, create_engine, text
 
 from fleetforge.config import Settings
+from fleetforge.kafka.retry import retry_transient
 from fleetforge.kafka.schemas import register, registry_client, subject_for
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -75,7 +77,15 @@ def fresh_topic() -> Iterator[str]:
     """A dedicated 6-partition telemetry topic with the v1 schema registered."""
     name = f"telemetry.test.{uuid.uuid4().hex[:10]}"
     admin = AdminClient({"bootstrap.servers": BOOTSTRAP})
-    admin.create_topics([NewTopic(name, 6, 1)])[name].result(30)
+
+    def create():
+        try:
+            admin.create_topics([NewTopic(name, 6, 1)])[name].result(30)
+        except KafkaException as exc:  # a retried request whose first attempt succeeded
+            if exc.args[0].code() != KafkaError.TOPIC_ALREADY_EXISTS:
+                raise
+
+    retry_transient(create)
     register(registry_client(REGISTRY), subject_for(name), 1)
     yield name
     admin.delete_topics([name])
@@ -100,8 +110,9 @@ def high_watermarks(topic: str) -> dict[int, int]:
 
     c = Consumer({"bootstrap.servers": BOOTSTRAP, "group.id": f"hw-{uuid.uuid4()}"})
     try:
-        md = c.list_topics(topic, timeout=10).topics[topic]
-        return {p: c.get_watermark_offsets(TopicPartition(topic, p), timeout=10)[1]
+        md = retry_transient(lambda: c.list_topics(topic, timeout=10)).topics[topic]
+        return {p: retry_transient(lambda p=p: c.get_watermark_offsets(
+                    TopicPartition(topic, p), timeout=10, cached=False))[1]
                 for p in md.partitions}  # fmt: skip
     finally:
         c.close()

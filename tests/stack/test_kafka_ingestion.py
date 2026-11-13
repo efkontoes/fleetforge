@@ -201,3 +201,94 @@ def test_outcome_mix_is_visible_in_projector_counts(fresh_topic, stack_settings,
     p.processor.process = counting
     p.run(max_idle_s=4.0)
     assert outcomes == expected(items, transport="kafka").outcomes
+
+
+def _paced_producer(items, topic, path, conf):
+    """Child process: publish paced, appending each acknowledged index to `path`."""
+    with open(path, "a", buffering=1) as f:
+        publish(items, bootstrap=BOOTSTRAP, registry_url=REGISTRY, topic=topic,
+                registrar=HttpRegistrar(API), pace_eps=400, producer_conf=conf,
+                on_delivery=lambda i: f.write(f"{i}\n"))  # fmt: skip
+
+
+def test_sigkilled_producer_loses_only_unacknowledged_events(fresh_topic, stack_settings,
+                                                             stack_db, tmp_path,
+                                                             record_property):  # fmt: skip
+    """E3: durability starts at the broker acknowledgement. A producer process killed
+    with SIGKILL loses what was still in its in-memory queue; whatever it saw
+    acknowledged is in Kafka. Resending from the last contiguous acknowledged index
+    (the checkpoint a real device would persist) restores the oracle state."""
+    import multiprocessing as mp
+    import os
+    import signal
+
+    from .conftest import high_watermarks
+
+    items = generate(SimConfig(seed=int(time.time()) % 10**6 + 7, robots=10, ticks=150,
+                               faults=FAULTS))  # fmt: skip
+    acks = tmp_path / "acks.txt"
+    child = mp.get_context("fork").Process(target=_paced_producer, args=(
+        items, fresh_topic, acks, {"linger.ms": 500}))  # fmt: skip
+    child.start()
+    wait_until(lambda: acks.exists() and len(acks.read_text().split()) > 300, 60, 0.05)
+    os.kill(child.pid, signal.SIGKILL)
+    child.join(10)
+    acked = {int(x) for x in acks.read_text().split()}
+    in_kafka = sum(high_watermarks(fresh_topic).values())
+    telemetry_idx = [i for i, it in enumerate(items) if isinstance(it, Telemetry)]
+    acked_telemetry = len(acked & set(telemetry_idx))
+    assert acked_telemetry <= in_kafka < len(telemetry_idx)
+
+    checkpoint = -1
+    while checkpoint + 1 in acked or (checkpoint + 1 < len(items)
+                                      and not isinstance(items[checkpoint + 1], Telemetry)):  # fmt: skip
+        checkpoint += 1
+    rest = publish(items, bootstrap=BOOTSTRAP, registry_url=REGISTRY, topic=fresh_topic,
+                   registrar=HttpRegistrar(API), start_index=checkpoint + 1)  # fmt: skip
+    assert not rest.failed
+    group = f"sigkill-{uuid.uuid4().hex[:8]}"
+    run_projector(stack_settings, stack_db, fresh_topic, group)
+    exp = expected(items, transport="kafka")
+    robots = {i.robot_id for i in items if isinstance(i, Telemetry)}
+    assert_state_matches_oracle(db_state(stack_db, robots), exp)
+    record_property("acked_before_kill", acked_telemetry)
+    record_property("in_kafka_before_resend", in_kafka)
+    record_property("resent", rest.delivered)
+    print(f"\nSIGKILL: {acked_telemetry} acked, {in_kafka} in Kafka; resent {rest.delivered}"
+          f" from checkpoint {checkpoint + 1}; duplicates absorbed by idempotency")  # fmt: skip
+
+
+@pytest.mark.disruptive
+def test_outage_longer_than_message_timeout_is_reported_not_hidden(fresh_topic,
+                                                                    stack_settings, stack_db,
+                                                                    record_property):  # fmt: skip
+    """E3: retries are bounded by message.timeout.ms. An outage longer than that turns
+    queued messages into explicit delivery FAILURES (never silent loss), and the
+    checkpoint tells the producer what to resend."""
+    items = generate(SimConfig(seed=int(time.time()) % 10**6 + 8, robots=10, ticks=120,
+                               faults=FAULTS))  # fmt: skip
+    acks: list[int] = []
+
+    def interrupt():
+        wait_until(lambda: len(acks) > 100, 60, 0.05, "first acknowledgements")
+        compose("stop", "kafka")
+        time.sleep(10)
+        compose("start", "kafka")
+
+    t = threading.Thread(target=interrupt)
+    t.start()
+    first = publish(items, bootstrap=BOOTSTRAP, registry_url=REGISTRY, topic=fresh_topic,
+                    registrar=HttpRegistrar(API), pace_eps=150,
+                    producer_conf={"message.timeout.ms": 3000}, on_delivery=acks.append)  # fmt: skip
+    t.join()
+    assert first.failed and first.delivered + len(first.failed) == first.produced
+    wait_until(_broker_up, 60, msg="broker back")
+    rest = publish(items, bootstrap=BOOTSTRAP, registry_url=REGISTRY, topic=fresh_topic,
+                   registrar=HttpRegistrar(API), start_index=first.checkpoint + 1)  # fmt: skip
+    assert not rest.failed
+    run_projector(stack_settings, stack_db, fresh_topic, f"timeout-{uuid.uuid4().hex[:8]}")
+    exp = expected(items, transport="kafka")
+    robots = {i.robot_id for i in items if isinstance(i, Telemetry)}
+    assert_state_matches_oracle(db_state(stack_db, robots), exp)
+    record_property("delivery_failures_reported", len(first.failed))
+    record_property("resent_from_checkpoint", rest.delivered)
