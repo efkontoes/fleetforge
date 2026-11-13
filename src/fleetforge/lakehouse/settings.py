@@ -23,7 +23,7 @@ class LakehouseSettings(BaseSettings):
     s3_secret_key: str = ""
 
     spark_master: str = "local[2]"
-    driver_memory: str = "1g"  # JVM heap only
+    driver_memory: str = "768m"  # JVM heap only; measured sufficient for slice 1
     # Off-heap ceilings. Without them the JVM grew to 1.35 GB RSS with a 768 MB heap
     # and was OOM-killed by its container (measured; see the spec's test log).
     driver_java_options: str = (
