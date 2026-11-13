@@ -172,10 +172,21 @@ def append_bronze(spark: SparkSession, rows: DataFrame, ranges: list[OffsetRange
                   properties: dict[str, str]) -> int:  # fmt: skip
     """Insert-if-absent append with the checkpoint in the same commit. Returns the
     number of new rows. Shared by the Kafka path and the fixture-driven tests."""
+    from pyspark.sql import Window
+    from pyspark.sql import functions as F
+
     target = fq(BRONZE_KAFKA_RECORDS)
     identity = list(BRONZE_KAFKA_RECORDS.identity)
     existing = spark.table(target).where(range_predicate_sql(ranges)).select(*identity)
-    new = rows.join(existing, identity, "left_anti").dropDuplicates(identity)
+    # One row per identity within the batch. Not dropDuplicates(): on Spark 4.1.4 its
+    # aggregate plus Iceberg's write projection fails CollapseProject plan validation.
+    first = Window.partitionBy(*identity).orderBy("ingested_at")
+    new = (
+        rows.join(existing, identity, "left_anti")
+        .withColumn("_copy", F.row_number().over(first))
+        .where("_copy = 1")
+        .drop("_copy")
+    )
     count = new.count()
     writer = new.writeTo(target)
     for k, v in properties.items():
