@@ -34,8 +34,8 @@ FIRMWARE_TOPIC = "fleetforge.fleet.firmware_versions"
 ROBOT_EVENTS_TOPIC = "fleet.robot-events.v1"
 
 # Canonical units: percent and metres. Multiply battery, divide position. Division
-# by an exact integer is correctly rounded (1234 / 1000 == 1.234); multiplying by
-# the inexact constant 0.001 is not (1234 * 0.001 == 1.2340000000000002).
+# by an exact integer is correctly rounded (9 / 1000 == 0.009); multiplying by the
+# inexact constant 0.001 is not (9 * 0.001 == 0.009000000000000001).
 BATTERY_MULTIPLIER = {"PERCENT": 1, "FRACTION": 100}
 POSITION_DIVISOR = {"M": 1, "MM": 1000}
 
