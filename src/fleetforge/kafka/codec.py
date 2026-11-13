@@ -30,13 +30,7 @@ class RegistryUnavailable(Exception):
 
 
 def _registry_down(exc: BaseException) -> bool:
-    """True if the failure says nothing about the record: transport errors of any
-    kind, and every registry answer except 404.
-
-    Classified by exception class, not by name. A hand-written list of names missed
-    httpx.ReadError ("Connection reset by peer" from a restarting registry), and the
-    final audit reproduced valid events being quarantined as MALFORMED_PAYLOAD
-    because of it."""
+    """True for transport errors and any registry answer except 404."""
     seen = set()
     while exc is not None and id(exc) not in seen:
         seen.add(id(exc))
@@ -65,19 +59,8 @@ class TelemetryEncoder:
 
 
 class TelemetryDecoder:
-    """Decodes with the *writer's* schema (looked up by the id in the message), so a
-    consumer built for revision 1 still decodes revision-2 data (extra fields ignored
-    by the contract layer).
-
-    The framing (magic byte 0 + 4-byte big-endian schema id) is read here and the body
-    decoded with fastavro, the library confluent-kafka's AvroDeserializer uses
-    underneath. The Confluent deserializer also evaluates data-contract rules and
-    walks the whole schema for inline field tags on EVERY message; we use neither,
-    and that walk was ~25 % of the projector's CPU (benchmarks/projector_gc.py
-    profile, final audit). Parsed writer schemas are cached per id: ids are
-    immutable. Failures are never cached. An unknown id (404) is a permanent
-    DecodeError only while the registry demonstrably holds this topic's subject;
-    otherwise it is RegistryUnavailable (retry, never quarantine)."""
+    """Confluent framing (magic byte + schema id) decoded with fastavro and the writer's
+    schema. A 404 is permanent only while the registry holds the topic's subject."""
 
     def __init__(self, client: SchemaRegistryClient, topic: str):
         self._client = client
@@ -85,11 +68,7 @@ class TelemetryDecoder:
         self._writers: dict[int, Any] = {}
 
     def _registry_is_authoritative(self) -> bool:
-        """True only if the registry demonstrably holds this topic's subject (uncached
-        call). Defensive: a registry that is reachable but has not finished loading its
-        store (Apicurio KafkaSQL re-reads it from Kafka on start) could answer 404 for
-        ids that exist. This was suspected during the audit but NOT observed; the
-        observed misclassification was a transport error (see _registry_down)."""
+        """Uncached check that the registry knows this topic's subject."""
         try:
             return self._subject in self._client.get_subjects(subject_prefix=self._subject)
         except Exception:

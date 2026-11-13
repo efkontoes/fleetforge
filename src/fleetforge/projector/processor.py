@@ -364,10 +364,7 @@ class BatchProcessor:
             k = (p.record.topic, p.record.partition)
             first[k] = min(first.get(k, p.record.offset), p.record.offset)
         for k, lowest in first.items():
-            # telemetry.raw.v1 is written without Kafka transactions, so its offsets are
-            # contiguous. A batch starting beyond the ledger means records in between
-            # were never delivered to us: librdkafka reset an out-of-range position
-            # (retention overtook a lagging consumer). Stop rather than skip them.
+            # offsets are contiguous (no Kafka transactions): a hole means lost records
             if 0 < ledger[k] < lowest:
                 raise OffsetLedgerError(
                     f"{self.group}/{k[0]}/{k[1]}: batch starts at {lowest} but the ledger"

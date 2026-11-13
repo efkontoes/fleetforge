@@ -130,9 +130,7 @@ class Replayer:
 
     def ledger_reset(self, group: str, topic: str, partition: int, to: int, reason: str,
                      dry_run: bool) -> dict[str, Any]:  # fmt: skip
-        """The only sanctioned way to move a ledger across a gap or onto a recreated
-        topic. Consumers of `group` refuse to start (OffsetLedgerError) until this is
-        done. Stop them first: a running consumer only reads the ledger on assignment."""
+        """Audited move of a consumer's ledger position (stop the consumer first)."""
         if not reason.strip():
             raise SystemExit("--reason is required")
         current_id = kafka_offsets.topic_id(self.s.kafka_bootstrap, topic)

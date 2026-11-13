@@ -32,7 +32,7 @@ from fleetforge.db import batch as sqlb
 from fleetforge.db.engine import make_engine
 from fleetforge.kafka import offsets as kafka_offsets
 from fleetforge.observability import configure_logging
-from fleetforge.projector.main import _close_bounded
+from fleetforge.projector.main import Membership, _close_bounded
 
 log = logging.getLogger("fleetforge.missions")
 GROUP = "mission-consumer"
@@ -75,8 +75,7 @@ def apply_events(engine: Engine, msgs: list[tuple[str, int, int, bytes | None]],
                 continue
             ev = parse(v)
             if ev is None:
-                # Kept with its coordinates and bytes, in the same transaction that
-                # moves the ledger past it: it can never be both skipped and lost.
+                # quarantined in the same transaction that moves the ledger past it
                 outcome["malformed"] += 1
                 log.warning("malformed mission event", extra={"partition": p, "offset": o})
                 cur.execute(
@@ -119,18 +118,21 @@ def apply_events(engine: Engine, msgs: list[tuple[str, int, int, bytes | None]],
 def run(settings: Settings, engine: Engine, stop: threading.Event, *, group: str = GROUP,
         topic: str | None = None, max_idle_s: float | None = None) -> dict[str, int]:  # fmt: skip
     topic = topic or settings.mission_events_topic
-    consumer = Consumer({"bootstrap.servers": settings.kafka_bootstrap, "group.id": group,
-                         "enable.auto.commit": False, "auto.offset.reset": "earliest"})  # fmt: skip
-
     tid = kafka_offsets.topic_id(settings.kafka_bootstrap, topic)
 
     def on_assign(c, parts):
-        with engine.connect() as conn:
-            ledger = sqlb.read_ledger(conn, group, topic)
+        ledger = kafka_offsets.read_ledger_with_retry(engine, group, topic)
         kafka_offsets.resolve_start_offsets(c, parts, ledger, tid, group=group)
         c.assign(parts)
 
-    consumer.subscribe([topic], on_assign=on_assign)
+    def connect() -> Consumer:
+        c = Consumer({"bootstrap.servers": settings.kafka_bootstrap, "group.id": group,
+                      "enable.auto.commit": False, "auto.offset.reset": "earliest"})  # fmt: skip
+        c.subscribe([topic], on_assign=on_assign)
+        return c
+
+    consumer = connect()
+    membership = Membership(settings.consumer_rejoin_timeout_s)
     totals = {"applied": 0, "ignored": 0, "malformed": 0, "skipped": 0}
     idle = time.monotonic()
     try:
@@ -143,6 +145,10 @@ def run(settings: Settings, engine: Engine, stop: threading.Event, *, group: str
                         raise KafkaException(m.error())
                     continue
                 msgs.append((m.topic(), m.partition(), m.offset(), m.value()))
+            if membership.lost_too_long(consumer):
+                log.error("not a consumer group member; recreating the Kafka client")
+                _close_bounded(consumer)
+                consumer = connect()
             if not msgs:
                 if max_idle_s and time.monotonic() - idle > max_idle_s:
                     break
@@ -150,7 +156,7 @@ def run(settings: Settings, engine: Engine, stop: threading.Event, *, group: str
             idle = time.monotonic()
             for k, n in apply_events(engine, msgs, group, {topic: tid}).items():
                 totals[k] += n
-            try:  # advisory, as in the telemetry projector: never stops the loop
+            try:  # advisory; the batch is already durable
                 consumer.commit(offsets=[TopicPartition(t, p, o + 1) for t, p, o, _ in msgs],
                                 asynchronous=True)  # fmt: skip
             except KafkaException as exc:

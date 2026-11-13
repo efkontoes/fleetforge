@@ -6,7 +6,7 @@ guarantees. It is not a code review. Every claim below points at a test, a
 measurement or a raw result file. Where something could not be verified, this
 document says so.
 
-**Summary.** The audit found **eight defects** and fixed them, and hit **one incident whose root cause it could not determine** (#9; mitigated, and diagnosable next time):
+**Summary.** The audit found **nine defects** and fixed them. It also hit **one failure whose root cause inside librdkafka is not proven** (#9). The recovery from it is implemented and tested; the cause is not.
 
 | # | Defect | Severity | Fix | Evidence |
 |---|---|---|---|---|
@@ -18,7 +18,8 @@ document says so.
 | 6 | The projector and mission-consumer roles could rewrite **each other's** offset ledger; the projector had an unused grant | medium (least privilege) | row-level security by topic; grant revoked | `test_consumers_cannot_touch_each_others_offset_ledger[*]` |
 | 7 | **A restarting schema registry turned valid events into permanent "malformed" data.** The registry classifier matched transport errors by a list of class *names* that lacked `httpx.ReadError`, so "Connection reset by peer" from a restarting registry quarantined valid events (reproduced: 4 events, 2 robots' `state_version` wrong). It predates the audit. My first fix in this audit targeted a hypothesised 404-while-loading cause and was wrong; the quarantine rows' own error messages showed the real one | high | classify by exception class (`httpx.TransportError`, `OSError`, timeouts); a 404 is permanent only while the registry holds the topic's subject (defensive, ADR 0009) | `test_registry_outage_pauses_projection_and_never_quarantines` (repeated runs), decoder unit tests |
 | 8 | CI and test harness: ruff version mismatch, mutable action tags, unpinned service image, missing timeouts; stack tests flaky on GitHub runners (`_DESTROY_BROKER`, `_UNKNOWN_PARTITION` from fresh clients); a failed wait could hang a job for 30–40 min; the test-only idle stop counted group-join time | medium (delivery) | pins, timeouts, bounded retry of one-shot admin/metadata calls (also used by the library), daemon threads, pytest-timeout + faulthandler, idle = no records while owning partitions | CI runs §11 |
-| 9 | **The Compose projector wedged after the disruptive suite:** alive, out of its consumer group for ~25 min, nothing logged after a session-timeout revoke, never restarted, while every projector-side alert stayed silent (its own metrics stop when it stops). Kernel evidence: main thread in a timed futex wait. **Root cause not determined**: two reproductions (Kafka down beyond the session timeout, with and without PostgreSQL down during the rejoin) recovered normally, and attaching a debugger to the container was not permitted | high (availability) | mitigations: the advisory Kafka commit can no longer raise out of the loop; bounded `close()` so a failing process always exits; exit 1 with a logged traceback on any error; `restart: unless-stopped` on long-running services (there was none); `ProjectorNotInGroup` / `MissionConsumerNotInGroup` alerts computed by kafka-exporter; `faulthandler` on SIGUSR1 (`docker compose kill -s USR1 projector` dumps all stacks, verified) | the stuck state was seen once, in local evidence run 3; the group was Stable after the final disruptive suite (§9) |
+| 9 | **A consumer can stay out of its group indefinitely after broker restarts.** Seen twice in local runs after the disruptive suite, on the projector and then on the mission consumer. Both kept running, never rejoined (the logs show a session timeout with no coordinator, `broker -1`), and every alert computed by the consumer itself stayed silent. A SIGUSR1 stack dump of the second case showed **the main thread polling normally inside `consume()`**: no crash, no hang in our code. In-network reproductions (8 s Kafka outage) showed membership lost and regained after ~30 s, not a permanent wedge. **Root cause inside librdkafka: not determined** | high (availability) | a client that has not been a group member for 120 s is closed and recreated (`Membership`, both consumers); positions come from the ledger, so nothing is skipped or applied twice. Also: `ProjectorNotInGroup` / `MissionConsumerNotInGroup` alerts from kafka-exporter; restart policies; bounded `close()`; the advisory commit cannot raise; SIGUSR1 stack dumps | `TestConsumerMembership` (unit). The real wedge could not be reproduced on demand, so client recreation is tested with fakes, not against the wedge itself |
+| 10 | **A recoverable database error during partition assignment killed the consumer.** `on_assign` reads the ledger; PostgreSQL "shutting down" at that moment propagated out of `consume()` and ended `run()`, although the same error is retried everywhere else (CI run 43353184403). Initially suspected as the mechanism of #9; the #9 stack dump rules that out | high (availability) | ledger read in `on_assign` retried with backoff for recoverable errors (120 s budget, inside `max.poll.interval.ms`); `OffsetLedgerError` still stops at once. Same in the mission consumer | `TestLedgerReadDuringAssignment`, `test_database_restart_while_kafka_buffers` |
 
 Three methodology errors in my own earlier benchmarks were also found:
 measuring from `produce()` (coordinated omission), a warm-up trim that only
@@ -116,7 +117,7 @@ three seeds. A planted bug (`state_version += 1` per batch instead of
 | Rolled-back mission change | no outbox row, nothing in Kafka | `test_rolled_back_change_never_reaches_kafka` |
 | Duplicate delivery | absorbed by the version guard | `test_repeated_delivery_is_absorbed_by_version_guard` |
 | Connect stopped, changes committed meanwhile | slot retains the WAL; all events delivered in order after restart | `test_debezium_restart_resumes_from_committed_offset` |
-| **Connect SIGKILLed during traffic** | the stall became visible end to end **17–25 s** after the kill (oldest undelivered change older than 15 s; 15 s scrape interval); all missions at their final version downstream **27–46 s** after restart (four kill runs; final evidence: 163/163). Detection range is from the two runs using the age criterion (mostly Connect's JVM start). An earlier version of this test used "missions behind > 0", which is also non-zero during normal traffic, and was replaced | `test_debezium_killed_during_mission_updates_is_detected_and_recovers` |
+| **Connect SIGKILLed during traffic** | the stall became visible end to end **17–29 s** after the kill (oldest undelivered change older than 15 s; 15 s scrape interval); all missions at their final version downstream **27–46 s** after restart (five kill runs; final evidence: 173/173). Detection range is from the three runs using the age criterion (mostly Connect's JVM start). An earlier version of this test used "missions behind > 0", which is also non-zero during normal traffic, and was replaced | `test_debezium_killed_during_mission_updates_is_detected_and_recovers` |
 | PostgreSQL restart | connector recovers by itself | `test_postgres_restart_cdc_recovers` |
 | Outbox cleanup | deletes are not published (`publish = 'insert'`) | `test_outbox_cleanup_is_invisible_to_cdc` |
 | Quiet captured tables under telemetry load | heartbeats keep slots advancing (was 531 MB pinned) | `test_quiet_captured_tables_do_not_pin_wal_under_telemetry_load` |
@@ -260,14 +261,14 @@ ends with an oracle comparison of final state, per-robot `state_version`, and
 |---|---|---|---|
 | E1 | Projector crash after the DB commit, before the Kafka commit | resume from ledger: 0 records re-read; trusting Kafka's offsets instead: the batch is redelivered and every record is `SKIPPED` | state = oracle, no regression, no duplicate effects, ledger exact |
 | E1 | Crash inside the DB transaction | nothing committed; the batch is re-read | state, audit and ledger unchanged |
-| E2 | PostgreSQL stopped 6.6 s while Kafka kept accepting | backlog 1,588 events; 7 retries with backoff; partitions paused (no fetching, bounded memory: test process 120 MiB RSS); 0 records quarantined; **drained 1.9 s after restart** | state = oracle; no infrastructure error recorded as bad data |
+| E2 | PostgreSQL stopped 6.6 s while Kafka kept accepting | backlog 1,588 events; 7 retries with backoff; partitions paused (no fetching, bounded memory: test process 119 MiB RSS); 0 records quarantined; **drained 1.9 s after restart** | state = oracle; no infrastructure error recorded as bad data |
 | E3 | Kafka stopped 8 s during publishing | the producer buffers; no acknowledgement during the outage; all acknowledged once afterwards | state = oracle |
-| E3 | Kafka stopped 10 s with `message.timeout.ms` = 3 s | **973 delivery failures reported** (not silent); resent from the checkpoint | state = oracle |
-| E3 | Producer **SIGKILLed** (2 s linger) | 260 acknowledged, 780 in Kafka at kill time; the rest of the queue lost; resend from the last contiguous acknowledged index (3,205 events, duplicates absorbed) | state = oracle. Durable from broker ack; best-effort before it |
-| E4 | Kafka Connect **SIGKILLed** during mission traffic (48 s down) | stall visible end to end 25 s after the kill; **163/163 missions** at their final version 42 s after restart | every mission's downstream version = source version |
+| E3 | Kafka stopped 10 s with `message.timeout.ms` = 3 s | delivery failures **reported** (not silent); resent from the checkpoint. Failed events can be resent *after* newer ones were delivered: the projector then records them STALE | same latest event per robot as the oracle, and per-robot conservation (applied + distinct stale = oracle's) |
+| E3 | Producer **SIGKILLed** (2 s linger) | 559 acknowledged, 918 in Kafka at kill time; the rest of the queue lost; resend from the last contiguous acknowledged index (3,179 events, duplicates absorbed) | state = oracle. Durable from broker ack; best-effort before it |
+| E4 | Kafka Connect **SIGKILLed** during mission traffic (51 s down) | stall visible end to end 29 s after the kill; **173/173 missions** at their final version 43 s after restart | every mission's downstream version = source version |
 | E4 | Connect stopped while changes commit; PostgreSQL restart under CDC | in-order delivery after restart; connector recovers by itself | event versions 0–3 in order |
 | E5 | Malformed bytes, missing fields, incompatible schema (v3 rejected by the registry), unknown schema id, invalid values, DB-refused records | quarantined with topic/partition/offset, reason, category, bytes; the partition keeps moving; poison isolated per record | quarantine rows = oracle; `fleet-replay` dry run/replay/correction tested |
-| E5 | **Schema registry stopped 11 s** with a cold projector cache | 9 retries, nothing committed, **0 quarantined**; projected 27 s after the registry returned | state and quarantine rows = oracle. This test found defect 7 |
+| E5 | **Schema registry stopped 19 s** with a cold projector cache | 9 retries, nothing committed, **0 quarantined**; projected 26 s after the registry returned | state and quarantine rows = oracle. This test found defect 7 |
 | E6 | Reconciliation | every benchmark run and every scenario above compares against the oracle; offsets: ledger = high watermark at the end of every sustained run; CDC: 696/696 missions current | see each row |
 
 The unit and integration suites add the ledger-identity, gap, RLS,
@@ -352,16 +353,20 @@ skipped.
 | [43344737029](https://github.com/efkontoes/fleetforge/actions/runs/43344737029) | `d46d7df` | stack 18/19 | SIGKILL test timing on a fast runner → test made speed-independent |
 | [43346126778](https://github.com/efkontoes/fleetforge/actions/runs/43346126778) | `21c7500` | stack 17/19 | `describe_topics` future timed out after topic recreation → retried, fresh client per attempt |
 | [43347638176](https://github.com/efkontoes/fleetforge/actions/runs/43347638176) | `2a697f7` | **all 6 jobs green**; stack: 19/19 non-disruptive + 6/6 disruptive on the runner | — |
+| [43353184403](https://github.com/efkontoes/fleetforge/actions/runs/43353184403) | `e683d32` | stack: 19/19 non-disruptive, 4/6 disruptive | defect #10 (DB error during assignment killed the projector); and an oracle that assumed in-order delivery after a producer failure (now checked by conservation: applied + stale per robot) |
 
 Later commits (the consumer-liveness mitigations and this documentation) are
 checked by PR #1's own checks. Their results are reported in the PR, because a
 document cannot cite the CI run of the commit that contains it.
 
-**Local evidence on the final code** (`docs/reviews/evidence/`): 182 unit,
+**Local evidence on the final code** (`docs/reviews/evidence/`): 186 unit,
 integration and failure tests, 19 non-disruptive and 6 disruptive stack tests,
-**207 passed, 0 failed, 0 skipped**. The 85 Milestone 1 test cases are included
+**211 passed, 0 failed, 0 skipped**. The 85 Milestone 1 test cases are included
 and their files are unchanged since `c9b52b6`. After the disruptive suite the
-Compose projector's consumer group was `Stable` with 1 member.
+Compose projector's and mission consumer's groups were `Stable` with 1 member each,
+0 of 1,203 missions were behind downstream, and the projector ledger (11,645)
+equalled the `telemetry.raw.v1` high watermarks (11,645), with the topic ID on all
+6 rows.
 
 ## 12. Remaining limitations
 
@@ -378,6 +383,7 @@ ready**, and nothing here claims it is.
 | CDC WAL retention | `max_slot_wal_keep_size = 2GB` ≈ **20 minutes** of Debezium downtime at 5,000 telemetry events/s (measured WAL rate) | slot lost → re-snapshot of the rows still in the outbox. Alerted before and after |
 | Outbox retention | rows older than N days deleted (guarded) | events deleted before a re-snapshot cannot be re-sent |
 | Producer durability | in-memory queue; a SIGKILL loses unacknowledged events | a device must persist its acknowledged checkpoint and resend from it (tested) |
+| Order after producer failures | events that failed and are resent after newer ones arrive late and are recorded STALE | the latest state is still correct and the events are in the raw log (Kafka, later bronze); the read model's `state_version` counts applied events only |
 | Schema registry | single instance (KafkaSQL storage); an outage pauses the projector (recoverable, tested) and blocks producers that look up new ids | production: replicated registry |
 | Kafka transactions | the projector's gap check assumes a non-transactional telemetry topic | written contract (runbook, ADR 0011) |
 | Partitioner | librdkafka default (CRC32), which differs from Java clients' murmur2 | any non-librdkafka producer must use the same partitioner, or per-robot order breaks |
@@ -385,4 +391,4 @@ ready**, and nothing here claims it is.
 | Capacity evidence | 10,000/s held for 60 s only; 5,000/s for 300 s | longer soaks (hours) not run: checkpoints, log segment rolls and retention deletes over hours untested |
 | Slot invalidation | detected and documented, **not destructively tested** | runbook procedure not executed end to end |
 | Ledger fail-closed | a recreated topic or a retention gap now **stops** the consumer | availability traded for correctness; pages via lag/staleness alerts; operator uses `ledger-reset` |
-| Consumer liveness | one unexplained wedge (#9); the process stayed alive, so a restart policy alone does not recover it | detected by the external `*NotInGroup` alerts; an operator dumps stacks (SIGUSR1) and restarts. Self-healing (a liveness probe that restarts) is future work |
+| Consumer liveness | the librdkafka cause of #9 is unknown | a client out of its group for 120 s is recreated; alerts fire after 2 min; SIGUSR1 stack dumps for diagnosis |

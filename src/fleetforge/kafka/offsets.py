@@ -1,30 +1,22 @@
-"""Where to resume a partition: the durable ledger, checked against the Kafka log.
+"""Resume positions from the PostgreSQL ledger, checked against the Kafka log.
 
-The offset ledger in PostgreSQL is the source of truth for "what has been applied".
-It is only meaningful for the exact log it was written against. Before seeking to
-it, a consumer verifies three things, and refuses to start otherwise:
-
-  topic identity   the ledger row's Kafka topic UUID equals the current one
-                   (a deleted-and-recreated topic keeps its name, not its UUID)
-  not ahead        next_offset <= high watermark; otherwise the log was recreated or
-                   truncated and seeking there would make librdkafka silently reset
-                   to the earliest offset and skip everything below the old position
-  no hole          next_offset >= low watermark; otherwise retention deleted records
-                   that were never applied
-
-Refusing is deliberate: each of these needs a human decision (replay from an
-archive, accept the loss, or reset), recorded with `fleet-replay ledger-reset`.
+A ledger row must match the topic's UUID and lie within [low, high] watermarks;
+otherwise the consumer stops (OffsetLedgerError) until `fleet-replay ledger-reset`.
 """
 
 from __future__ import annotations
 
 import logging
+import time
+from collections.abc import Callable
 
 from confluent_kafka import Consumer, TopicCollection, TopicPartition
 from confluent_kafka.admin import AdminClient
+from sqlalchemy import Engine
 
+from fleetforge.db import batch as sqlb
 from fleetforge.db.batch import LedgerPosition
-from fleetforge.domain.errors import OffsetLedgerError
+from fleetforge.domain.errors import OffsetLedgerError, is_recoverable
 from fleetforge.kafka.retry import retry_transient
 
 log = logging.getLogger(__name__)
@@ -41,6 +33,31 @@ def topic_id(bootstrap: str, topic: str, timeout: float = 10.0) -> str:
     return str(retry_transient(once).topic_id)
 
 
+def read_ledger_with_retry(
+    engine: Engine,
+    group: str,
+    topic: str,
+    budget_s: float = 120.0,
+    on_retry: Callable[[BaseException], None] | None = None,
+) -> dict[int, LedgerPosition]:
+    """Read the ledger during partition assignment, retrying recoverable failures."""
+    deadline = time.monotonic() + budget_s
+    backoff = 0.2
+    while True:
+        try:
+            with engine.connect() as conn:
+                return sqlb.read_ledger(conn, group, topic)
+        except Exception as exc:
+            if not is_recoverable(exc) or time.monotonic() + backoff > deadline:
+                raise
+            if on_retry:
+                on_retry(exc)
+            log.warning("offset ledger unavailable during assignment; retrying",
+                        extra={"error": type(exc).__name__, "backoff_s": backoff})  # fmt: skip
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 5.0)
+
+
 def resolve_start_offsets(
     consumer: Consumer,
     partitions: list[TopicPartition],
@@ -50,11 +67,7 @@ def resolve_start_offsets(
     group: str,
     timeout: float = 10.0,
 ) -> None:
-    """Set tp.offset from the ledger for every assigned partition, or raise.
-
-    Partitions without ledger history keep the consumer's default position
-    (auto.offset.reset), which is correct for a brand-new consumer group.
-    """
+    """Set tp.offset from the ledger; partitions without a row keep auto.offset.reset."""
     for tp in partitions:
         pos = ledger.get(tp.partition)
         if pos is None:
@@ -65,9 +78,7 @@ def resolve_start_offsets(
                 f"{where}: ledger written for topic id {pos.kafka_topic_id}, topic is now"
                 f" {current_topic_id} (deleted and recreated)"
             )
-        # A committed row is honoured even at 0: normal batches seed and advance a row in
-        # one transaction, so 0 only comes from `ledger-reset --to 0` (reprocess from the
-        # start). Falling back to Kafka's advisory offset would silently skip that.
+        # a committed 0 comes only from `ledger-reset --to 0` and is honoured
         low, high = retry_transient(
             lambda tp=tp: consumer.get_watermark_offsets(tp, timeout=timeout, cached=False)
         )

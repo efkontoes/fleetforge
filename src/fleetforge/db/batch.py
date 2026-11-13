@@ -47,13 +47,8 @@ def lock_ledger(
 ) -> dict[tuple[str, int], int]:
     """Current next_offset per (topic, partition), row-locked until commit.
 
-    The lock fences a 'zombie' consumer that still believes it owns a partition
-    after a rebalance: it blocks here, then sees the advanced offset and skips the
-    records already applied by the new owner.
-
-    `topic_ids` maps topic name -> the Kafka topic UUID the caller is reading. A row
-    written for a different UUID belongs to a deleted incarnation of the topic; its
-    offsets mean nothing for the new one, so we refuse instead of skipping records.
+    The lock fences a zombie consumer. A row written for another topic UUID (the
+    topic was recreated) raises OffsetLedgerError.
     """
     parts = sorted(set(parts))
     topic_ids = topic_ids or {}

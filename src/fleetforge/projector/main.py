@@ -25,7 +25,6 @@ from prometheus_client import start_http_server
 from sqlalchemy import Engine
 
 from fleetforge.config import Settings, get_settings
-from fleetforge.db import batch as sqlb
 from fleetforge.db.engine import make_engine
 from fleetforge.domain.errors import ErrorCategory, category_of, is_recoverable
 from fleetforge.kafka import offsets as kafka_offsets
@@ -72,39 +71,37 @@ class Projector:
             consumer_group=self.group,
             fault_hook=fault_hook,
         )
-        self.consumer = Consumer(
-            {
-                "bootstrap.servers": settings.kafka_bootstrap,
-                "group.id": self.group,
-                "enable.auto.commit": False,  # offsets are committed after the DB, by us
-                "auto.offset.reset": "earliest",
-                "max.poll.interval.ms": 300_000,
-                "session.timeout.ms": 30_000,
-                "fetch.wait.max.ms": 100,
-                "client.id": f"projector-{self.group}",
-                **(consumer_conf or {}),
-            }
-        )
+        self._conf = {
+            "bootstrap.servers": settings.kafka_bootstrap,
+            "group.id": self.group,
+            "enable.auto.commit": False,  # the PostgreSQL ledger is the real commit
+            "auto.offset.reset": "earliest",
+            "max.poll.interval.ms": 300_000,
+            "session.timeout.ms": 30_000,
+            "fetch.wait.max.ms": 100,
+            "client.id": f"projector-{self.group}",
+            **(consumer_conf or {}),
+        }
+        self.consumer = Consumer(self._conf)
         self.stop = threading.Event()
         self.stats = RunStats()
         self._revoked = False
-        self._assigned = False  # partitions received at least once
+        self._assigned = False
+        self._membership = Membership(settings.consumer_rejoin_timeout_s)
         self._last_lag = 0.0
         m.POOL_SIZE.set(settings.db_pool_size)
-        # The incarnation of the topic this ledger is bound to (see kafka/offsets.py).
         self.topic_id = topic_id or kafka_offsets.topic_id(settings.kafka_bootstrap, self.topic)
         self.processor.topic_ids = {self.topic: self.topic_id}
 
     # ------------------------------------------------------------------ rebalance
 
     def _on_assign(self, consumer: Consumer, partitions: list[TopicPartition]) -> None:
-        """The DB ledger, not Kafka's committed offset, decides where to resume.
-        Raises OffsetLedgerError (out of consume(), stopping the process) when the
-        ledger cannot be reconciled with the log."""
+        """Resume from the PostgreSQL ledger (OffsetLedgerError if it does not match the log)."""
         ledger = {}
         if self.seek_to_ledger:
-            with self.engine.connect() as conn:
-                ledger = sqlb.read_ledger(conn, self.group, self.topic)
+            ledger = kafka_offsets.read_ledger_with_retry(
+                self.engine, self.group, self.topic, on_retry=self._count_retry
+            )
             kafka_offsets.resolve_start_offsets(consumer, partitions, ledger, self.topic_id,
                                                 group=self.group)  # fmt: skip
         consumer.assign(partitions)
@@ -112,22 +109,21 @@ class Projector:
         log.info("partitions assigned", extra={"partitions": [p.partition for p in partitions],
                                                "from_ledger": sorted(ledger)})  # fmt: skip
 
+    def _count_retry(self, exc: BaseException) -> None:
+        m.DB_AVAILABLE.set(0)
+        m.RETRIES.labels(type(exc).__name__).inc()
+        self.stats.retries += 1
+
     def _on_revoke(self, consumer: Consumer, partitions: list[TopicPartition]) -> None:
-        self._revoked = True  # abandon any in-flight retry; the new owner resumes from ledger
+        self._revoked = True  # abandon an in-flight retry; the new owner resumes from the ledger
         log.info("partitions revoked", extra={"partitions": [p.partition for p in partitions]})
 
     # ------------------------------------------------------------------ loop
 
     def run(self, max_idle_s: float | None = None) -> RunStats:
-        # Everything allocated so far (modules, SQLAlchemy, schemas, clients) lives for
-        # the whole process. Freezing it removes it from every future full GC scan:
-        # measured gen-2 pauses 60-160 ms every ~2.5 s per projector before, < 1 ms
-        # after (benchmarks/projector_gc.py). Frozen objects are still freed by
-        # reference counting; they are only excluded from cycle detection.
         gc.collect()
-        gc.freeze()
-        self.consumer.subscribe([self.topic], on_assign=self._on_assign,
-                                on_revoke=self._on_revoke)  # fmt: skip
+        gc.freeze()  # long-lived start-up objects leave full GC scans
+        self._subscribe()
         idle_since = started = time.monotonic()
         try:
             while not self.stop.is_set():
@@ -146,12 +142,10 @@ class Projector:
                     records.append(SourceRecord(msg.topic(), msg.partition(), msg.offset(),
                                                 msg.value(), ts))  # fmt: skip
                 self._update_lag()
+                self._check_membership()
                 if not records:
                     if max_idle_s is not None:
-                        # "Idle" means no records while owning partitions. Joining the
-                        # group does not count: after a broker restart the coordinator
-                        # can take several seconds (seen under memory pressure). Give
-                        # up if no assignment arrives within 60 s.
+                        # idle = no records while owning partitions; joining is not idle
                         if not self._assigned:
                             if time.monotonic() - started > max(60.0, max_idle_s):
                                 break
@@ -164,6 +158,18 @@ class Projector:
         finally:
             _close_bounded(self.consumer)
         return self.stats
+
+    def _subscribe(self) -> None:
+        self.consumer.subscribe([self.topic], on_assign=self._on_assign,
+                                on_revoke=self._on_revoke)  # fmt: skip
+
+    def _check_membership(self) -> None:
+        if self._membership.lost_too_long(self.consumer):
+            log.error("not a consumer group member; recreating the Kafka client")
+            m.RETRIES.labels("ConsumerRecreated").inc()
+            _close_bounded(self.consumer)
+            self.consumer = Consumer(self._conf)
+            self._subscribe()
 
     def _handle(self, records: list[SourceRecord]) -> None:
         self._revoked = False
@@ -178,10 +184,7 @@ class Projector:
                 offsets=[TopicPartition(t, p, o) for (t, p), o in result.next_offsets.items()],
                 asynchronous=True,
             )
-        except KafkaException as exc:
-            # Advisory only: the batch is already durable in PostgreSQL and the ledger,
-            # not this commit, decides where to resume. Right after a session timeout
-            # or rebalance it can fail synchronously; that must never stop the loop.
+        except KafkaException as exc:  # advisory; the batch is already durable
             m.RETRIES.labels("KafkaCommit").inc()
             log.warning("advisory Kafka offset commit failed",
                         extra={"error": exc.args[0].str() if exc.args else str(exc)})  # fmt: skip
@@ -245,12 +248,28 @@ class Projector:
             pass
 
 
+class Membership:
+    """Detects a client stuck outside its consumer group so it can be recreated."""
+
+    def __init__(self, timeout_s: float):
+        self.timeout_s = timeout_s
+        self.since: float | None = None
+
+    def lost_too_long(self, consumer: Consumer) -> bool:
+        if consumer.memberid():
+            self.since = None
+            return False
+        now = time.monotonic()
+        if self.since is None:
+            self.since = now
+        if now - self.since > self.timeout_s:
+            self.since = None
+            return True
+        return False
+
+
 def _close_bounded(consumer: Consumer, timeout_s: float = 10.0) -> None:
-    """Consumer.close() leaves the group and can block indefinitely in the middle of a
-    rebalance or while the broker is unreachable. A projector found wedged in the
-    final audit (alive, out of its group, nothing logged, never restarted) is
-    consistent with that. Close in a daemon thread and give up after `timeout_s`, so
-    an exiting process always exits and its error is always reported."""
+    """Consumer.close() can block during a rebalance or a broker outage; never wait forever."""
     closer = threading.Thread(target=consumer.close, name="consumer-close", daemon=True)
     closer.start()
     closer.join(timeout_s)
@@ -262,9 +281,7 @@ def _close_bounded(consumer: Consumer, timeout_s: float = 10.0) -> None:
 def main() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
-    # `docker compose kill -s USR1 projector` dumps every thread's stack to the logs,
-    # so a stuck process can be diagnosed without ptrace or extra tools.
-    faulthandler.enable()
+    faulthandler.enable()  # SIGUSR1 dumps all thread stacks to the log
     faulthandler.register(signal.SIGUSR1, all_threads=True)
     start_http_server(settings.projector_metrics_port)
     engine = make_engine(settings)

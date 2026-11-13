@@ -129,10 +129,8 @@ class PublishReport:
     active_s: float = 0.0  # longest single producer's own publish window (no fork/pickle)
     cpu_s: float = 0.0
     faults: Counter = field(default_factory=Counter)
-    # Benchmark tracing (trace_every > 0). Times are time.monotonic_ns(): CLOCK_MONOTONIC
-    # is system-wide on Linux, so it is comparable across processes on one host.
+    # benchmark tracing: (partition, offset, scheduled, enqueued, acked) in monotonic ns
     trace: list[tuple[int, int, int, int, int]] = field(default_factory=list)
-    #   (partition, offset, scheduled_ns, enqueued_ns, acked_ns) for offset % trace_every == 0
     max_behind_s: float = 0.0  # worst lateness of a produce() call vs the pacing schedule
 
 

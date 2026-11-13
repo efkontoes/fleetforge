@@ -1,22 +1,5 @@
-"""Offset-ledger identity and fail-closed recovery; mission-event quarantine.
-
-Found by the Milestone 2 audit: the ledger stored only (group, topic, partition,
-next_offset). If a topic is deleted and recreated, its offsets restart at 0 while
-the ledger still says, for example, 50 000. On restart the projector would then
-either seek past the end (librdkafka silently resets to the earliest offset) and
-mark every new record below 50 000 as SKIPPED, or, if the new topic had already
-grown past 50 000, start in the middle of it. Both lose data silently.
-
-* kafka_topic_id records Kafka's topic UUID, which changes when a topic is
-  recreated even if the name does not. A mismatch stops the consumer.
-* fleet.replay_runs gains mode LEDGER_RESET: the only sanctioned way to move a
-  ledger backwards or across a gap is an audited operator command.
-* downstream.mission_event_quarantine: malformed mission events used to be only
-  logged and counted; they now keep their Kafka coordinates and bytes.
-* Least privilege (audit): the projector and the mission consumer could each
-  rewrite the other's ledger rows (table-level grants). Row-level security now
-  confines each to its own topics. The projector's unused SELECT on fleet.missions
-  is revoked.
+"""Ledger bound to the Kafka topic UUID, LEDGER_RESET replay mode, mission-event
+quarantine, and row-level security so each consumer touches only its own ledger rows.
 
 Revision ID: 0008
 Revises: 0007

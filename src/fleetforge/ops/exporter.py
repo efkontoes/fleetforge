@@ -71,9 +71,7 @@ class OpsCollector:
                 lost.add_metric([r.slot_name], 1.0 if r.wal_status == "lost" else 0.0)
                 if r.safe_wal_size is not None:  # NULL when no cap is configured
                     safe.add_metric([r.slot_name], float(r.safe_wal_size))
-            # End-to-end completeness of the outbox -> CDC -> consumer path. A committed
-            # mission change exists in fleet.missions; it is delivered once the
-            # independent consumer's row has caught up with its version.
+            # end-to-end CDC: missions whose downstream version is behind the source
             n_behind, age = c.execute(text("""
                 SELECT count(*), EXTRACT(EPOCH FROM now() - min(m.updated_at))
                 FROM fleet.missions m

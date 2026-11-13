@@ -1,12 +1,4 @@
-"""Bounded retry for transient Kafka client errors on one-shot admin/metadata calls.
-
-Found by the first CI run on GitHub's runners: a request issued by a brand-new client
-right after start can fail with _DESTROY_BROKER ("Broker handle destroyed without
-termination"). librdkafka 2.x retires the temporary bootstrap connection as soon as
-metadata names the real broker, and a request in flight on it fails. The client does
-not flag this error as retriable(), but the request is safe to repeat. Never used
-for produce/consume paths, which have their own retry semantics.
-"""
+"""Bounded retry for one-shot Kafka admin/metadata calls from fresh clients."""
 
 from __future__ import annotations
 
@@ -20,9 +12,7 @@ TRANSIENT = {
     KafkaError._TRANSPORT,
     KafkaError._TIMED_OUT,
     KafkaError._ALL_BROKERS_DOWN,
-    # Local: a fresh client's metadata cache does not know the partition yet (seen on
-    # CI right after a PostgreSQL restart). A partition that really does not exist
-    # still fails, after the bounded retries.
+    # a fresh client's metadata cache may not know the partition yet
     KafkaError._UNKNOWN_PARTITION,
 }
 
@@ -33,9 +23,7 @@ def is_transient(exc: BaseException) -> bool:
 
 
 def retry_transient[T](fn: Callable[[], T], attempts: int = 6, backoff_s: float = 0.2) -> T:
-    """Also retries a future that timed out (concurrent.futures.TimeoutError is the
-    builtin TimeoutError): seen on CI when describe_topics ran right after a topic
-    was deleted and recreated and the controller was briefly busy."""
+    """Retry transient Kafka errors and timed-out futures with exponential backoff."""
     for i in range(attempts):
         try:
             return fn()

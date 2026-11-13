@@ -288,3 +288,96 @@ class TestKafkaRetry:
 
         with pytest.raises(KafkaException):
             retry_transient(always, attempts=3, backoff_s=0)
+
+
+class TestLedgerReadDuringAssignment:
+    """CI: PostgreSQL shutting down at the moment partitions were assigned raised out
+    of the rebalance callback and killed the consumer. Recoverable errors are retried
+    within a budget; anything else, or an exhausted budget, still propagates."""
+
+    def _engine(self, failures, exc):
+        from contextlib import contextmanager
+
+        calls = []
+
+        class Engine:
+            @contextmanager
+            def connect(self):
+                calls.append(1)
+                if len(calls) <= failures:
+                    raise exc
+                yield "conn"
+
+        return Engine(), calls
+
+    def test_recoverable_errors_are_retried_then_the_ledger_is_read(self, monkeypatch):
+        import psycopg
+
+        from fleetforge.kafka import offsets
+
+        monkeypatch.setattr(offsets.sqlb, "read_ledger", lambda conn, g, t: {0: "pos"})
+        monkeypatch.setattr(offsets.time, "sleep", lambda s: None)
+        engine, calls = self._engine(3, psycopg.OperationalError("shutting down"))
+        seen = []
+        assert offsets.read_ledger_with_retry(engine, "g", "t", on_retry=seen.append) == {0: "pos"}
+        assert len(calls) == 4 and len(seen) == 3
+
+    def test_non_recoverable_errors_and_exhausted_budgets_propagate(self, monkeypatch):
+        import psycopg
+
+        from fleetforge.kafka import offsets
+
+        monkeypatch.setattr(offsets.time, "sleep", lambda s: None)
+        engine, _ = self._engine(1, ValueError("bug"))
+        with pytest.raises(ValueError):
+            offsets.read_ledger_with_retry(engine, "g", "t")
+        engine, _ = self._engine(10**6, psycopg.OperationalError("down"))
+        with pytest.raises(psycopg.OperationalError):
+            offsets.read_ledger_with_retry(engine, "g", "t", budget_s=0.0)
+
+
+class TestConsumerMembership:
+    class Fake:
+        def __init__(self, member=""):
+            self.member, self.closed, self.subscribed = member, False, False
+
+        def memberid(self):
+            return self.member
+
+        def close(self):
+            self.closed = True
+
+        def subscribe(self, topics, **kw):
+            self.subscribed = True
+
+    def test_only_a_long_absence_from_the_group_triggers_recreation(self, monkeypatch):
+        from fleetforge.projector import main
+
+        clock = [0.0]
+        monkeypatch.setattr(main.time, "monotonic", lambda: clock[0])
+        ms, c = main.Membership(120), self.Fake()
+        assert not ms.lost_too_long(c)
+        clock[0] = 100
+        assert not ms.lost_too_long(c)
+        c.member = "m-1"  # rejoined in time: the timer resets
+        assert not ms.lost_too_long(c)
+        c.member = ""
+        clock[0] = 200
+        assert not ms.lost_too_long(c)
+        clock[0] = 321
+        assert ms.lost_too_long(c)
+
+    def test_projector_replaces_a_client_stuck_outside_its_group(self, monkeypatch):
+        from fleetforge.config import Settings
+        from fleetforge.projector import main
+
+        created = []
+        monkeypatch.setattr(
+            main, "Consumer", lambda conf: created.append(self.Fake("m")) or created[-1]
+        )
+        p = main.Projector.__new__(main.Projector)
+        p.s, p.topic, p._conf = Settings(consumer_rejoin_timeout_s=0), "t", {}
+        p._membership = main.Membership(-1)  # already "too long"
+        p.consumer = stuck = self.Fake("")
+        p._check_membership()
+        assert stuck.closed and p.consumer is created[0] and p.consumer.subscribed

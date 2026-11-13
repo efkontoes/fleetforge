@@ -127,8 +127,7 @@ def generate(cfg: SimConfig) -> list[Item]:
 
 
 def iter_generate(cfg: SimConfig) -> Iterator[Item]:
-    """The same stream as generate(), produced lazily (long benchmark runs would not
-    fit in memory as a list: ~1 KB per event in Python objects)."""
+    """The same stream as generate(), produced lazily for long runs."""
     # String seeds are hashed with SHA-512 by random.Random: stable across processes
     # and Python versions, and unaffected by PYTHONHASHSEED.
     fleet_rng = random.Random(f"fleetforge:{cfg.seed}:fleet")

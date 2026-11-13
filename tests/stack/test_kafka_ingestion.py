@@ -293,6 +293,32 @@ def test_outage_longer_than_message_timeout_is_reported_not_hidden(fresh_topic,
     run_projector(stack_settings, stack_db, fresh_topic, f"timeout-{uuid.uuid4().hex[:8]}")
     exp = expected(items, transport="kafka")
     robots = {i.robot_id for i in items if isinstance(i, Telemetry)}
-    assert_state_matches_oracle(db_state(stack_db, robots), exp)
+    state = db_state(stack_db, robots)
+    # The oracle assumes in-order delivery. Here some events FAILED while later ones
+    # were delivered, and the resend put the earlier events behind newer ones. The
+    # projector then correctly records them STALE instead of APPLIED (CI showed it).
+    # What must hold: the same latest event per robot (nothing lost, no regression),
+    # and conservation: applied + distinct stale per robot equals the oracle's.
+    assert set(state) == set(exp.latest)
+    for rid, payload in exp.latest.items():
+        assert str(state[rid]["event_id"]) == payload["event_id"], rid
+    robot_of = {i.payload.get("event_id"): i.robot_id for i in items
+                if isinstance(i, Telemetry) and i.payload.get("event_id")}  # fmt: skip
+    exp_stale: Counter = Counter()
+    for (key, outcome, _reason), _n in exp.event_outcomes.items():
+        if outcome in ("STALE", "CONFLICT") and key in robot_of:
+            exp_stale[robot_of[key]] += 1
+    with stack_db.connect() as c:
+        db_stale = Counter({str(r[0]): r[1] for r in c.execute(text(
+            "SELECT robot_id, count(DISTINCT event_id) FROM fleet.telemetry_rejections"
+            " WHERE source_topic = :t AND reason_code IN ('STALE_SEQUENCE', 'SEQUENCE_CONFLICT')"
+            " GROUP BY robot_id"), {"t": fresh_topic})})  # fmt: skip
+    for rid in exp.latest:
+        r = str(rid)
+        assert (
+            state[rid]["state_version"] + db_stale[r] == exp.state_versions[rid] + exp_stale[r]
+        ), r
+    reordered = sum(exp.state_versions[rid] - state[rid]["state_version"] for rid in exp.latest)
+    record_property("events_turned_stale_by_resend_reordering", reordered)
     record_property("delivery_failures_reported", len(first.failed))
     record_property("resent_from_checkpoint", rest.delivered)

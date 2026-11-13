@@ -97,21 +97,20 @@ backup: no point-in-time recovery. After restoring an older dump:
   enough, because it is computed from *delivered* events and is silent during a
   total stall.
 * Measured (SIGKILL of Kafka Connect during mission traffic): the stall was
-  visible end to end 25 s after the kill (oldest undelivered change older than
-  15 s; the exporter is scraped every 15 s), and all 163 committed missions were
-  delivered 42 s after restart, most of it Connect's JVM start.
+  visible end to end 29 s after the kill (oldest undelivered change older than
+  15 s; the exporter is scraped every 15 s), and all 173 committed missions were
+  delivered 43 s after restart, most of it Connect's JVM start.
 
 ## Consumer alive but not consuming
 
-Alerts `ProjectorNotInGroup` / `MissionConsumerNotInGroup` (computed by
-kafka-exporter, so they work even when the consumer's own metrics have stopped).
-Seen once in the final audit; root cause not determined.
-1. Capture evidence first: `docker compose kill -s USR1 projector`, then
-   `docker compose logs --tail 200 projector`. Every thread's Python stack is in
-   the log; the process keeps running.
-2. `docker compose restart projector`. It resumes from the PostgreSQL ledger;
-   nothing is lost or applied twice.
-3. Attach the stack dump to the incident.
+Alerts `ProjectorNotInGroup` / `MissionConsumerNotInGroup` come from kafka-exporter,
+so they work even when the consumer's own metrics have stopped. A consumer that
+has been out of its group for 120 s (`FLEETFORGE_CONSUMER_REJOIN_TIMEOUT_S`)
+recreates its Kafka client by itself and logs "recreating the Kafka client". If
+the alert persists anyway:
+1. `docker compose kill -s USR1 projector`, then `docker compose logs --tail 200 projector`.
+   Every thread's stack is in the log, and the process keeps running.
+2. `docker compose restart projector`. It resumes from the PostgreSQL ledger.
 
 ## Consumer refuses to start: `OffsetLedgerError`
 

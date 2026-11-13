@@ -230,7 +230,7 @@ memory pressure on this laptop, and cold starts.
 | Kafka stopped 10 s with `message.timeout.ms=3000` | queued events reported as **delivery failures** (not silent); resent from the checkpoint; state = oracle |
 | Producer SIGKILLed | acknowledged ≤ in Kafka < produced; resend from the last contiguous acknowledged index; state = oracle |
 | Projector crash after DB commit | resume from the ledger: 0 records re-read |
-| Kafka Connect SIGKILLed during mission traffic | stall visible end to end after 17–25 s (oldest undelivered change > 15 s; two runs); all missions downstream 27–46 s after restart (four runs; last: 163 missions) |
+| Kafka Connect SIGKILLed during mission traffic | stall visible end to end after 17–29 s (oldest undelivered change > 15 s; three runs); all missions downstream 27–46 s after restart (five runs; last: 173 missions) |
 | Backlog drain rate | 11,771 events/s with 3 consumers |
 
 ## 6. Bottleneck analysis
