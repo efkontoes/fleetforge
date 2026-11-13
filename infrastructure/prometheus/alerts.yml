@@ -21,6 +21,23 @@ groups:
         annotations:
           summary: p95 event-to-state latency above 10 s
 
+      - alert: ProjectorNotInGroup
+        # Computed by kafka-exporter, not by the projector: a wedged projector stops
+        # updating its own metrics (final audit: one stayed alive, out of its group,
+        # for 25 min while every projector-side alert stayed silent).
+        expr: max(kafka_consumergroup_members{consumergroup="telemetry-projector"}) == 0
+        for: 2m
+        labels: {severity: page}
+        annotations:
+          summary: No telemetry projector is a member of its consumer group
+
+      - alert: MissionConsumerNotInGroup
+        expr: max(kafka_consumergroup_members{consumergroup="mission-consumer"}) == 0
+        for: 2m
+        labels: {severity: page}
+        annotations:
+          summary: The mission-events consumer is not a member of its consumer group
+
       - alert: ProjectorDatabaseUnavailable
         expr: min(fleetforge_projector_db_available) == 0
         for: 1m

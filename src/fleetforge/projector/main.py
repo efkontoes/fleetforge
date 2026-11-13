@@ -10,9 +10,11 @@ A failure in 2 rolls everything back; nothing is acknowledged anywhere.
 
 from __future__ import annotations
 
+import faulthandler
 import gc
 import logging
 import signal
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -160,7 +162,7 @@ class Projector:
                 idle_since = time.monotonic()
                 self._handle(records)
         finally:
-            self.consumer.close()
+            _close_bounded(self.consumer)
         return self.stats
 
     def _handle(self, records: list[SourceRecord]) -> None:
@@ -171,10 +173,18 @@ class Projector:
             return  # partitions moved during an outage; the new owner takes over
         m.BATCH_SECONDS.observe(time.perf_counter() - t0)
         self.fault("after_db_commit")
-        self.consumer.commit(
-            offsets=[TopicPartition(t, p, o) for (t, p), o in result.next_offsets.items()],
-            asynchronous=True,
-        )
+        try:
+            self.consumer.commit(
+                offsets=[TopicPartition(t, p, o) for (t, p), o in result.next_offsets.items()],
+                asynchronous=True,
+            )
+        except KafkaException as exc:
+            # Advisory only: the batch is already durable in PostgreSQL and the ledger,
+            # not this commit, decides where to resume. Right after a session timeout
+            # or rebalance it can fail synchronously; that must never stop the loop.
+            m.RETRIES.labels("KafkaCommit").inc()
+            log.warning("advisory Kafka offset commit failed",
+                        extra={"error": exc.args[0].str() if exc.args else str(exc)})  # fmt: skip
         self._observe(records, result)
 
     def _process_with_retry(self, records: list[SourceRecord]) -> BatchResult | None:
@@ -235,9 +245,27 @@ class Projector:
             pass
 
 
+def _close_bounded(consumer: Consumer, timeout_s: float = 10.0) -> None:
+    """Consumer.close() leaves the group and can block indefinitely in the middle of a
+    rebalance or while the broker is unreachable. A projector found wedged in the
+    final audit (alive, out of its group, nothing logged, never restarted) is
+    consistent with that. Close in a daemon thread and give up after `timeout_s`, so
+    an exiting process always exits and its error is always reported."""
+    closer = threading.Thread(target=consumer.close, name="consumer-close", daemon=True)
+    closer.start()
+    closer.join(timeout_s)
+    if closer.is_alive():
+        log.error("consumer close did not finish; exiting anyway",
+                  extra={"timeout_s": timeout_s})  # fmt: skip
+
+
 def main() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
+    # `docker compose kill -s USR1 projector` dumps every thread's stack to the logs,
+    # so a stuck process can be diagnosed without ptrace or extra tools.
+    faulthandler.enable()
+    faulthandler.register(signal.SIGUSR1, all_threads=True)
     start_http_server(settings.projector_metrics_port)
     engine = make_engine(settings)
     projector = Projector(settings, engine)
@@ -245,7 +273,11 @@ def main() -> None:
     signal.signal(signal.SIGINT, lambda *_: projector.stop.set())
     log.info("projector starting", extra={"mode": settings.projector_mode,
                                           "batch_size": settings.projector_batch_size})  # fmt: skip
-    stats = projector.run()
+    try:
+        stats = projector.run()
+    except Exception:
+        log.exception("projector failed; exiting so the container restarts")
+        sys.exit(1)
     log.info("projector stopped", extra=stats.__dict__)
 
 

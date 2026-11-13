@@ -12,9 +12,11 @@ same transaction via fleet.consumer_offsets, exactly like the telemetry projecto
 
 from __future__ import annotations
 
+import faulthandler
 import json
 import logging
 import signal
+import sys
 import threading
 import time
 from datetime import UTC, datetime
@@ -30,6 +32,7 @@ from fleetforge.db import batch as sqlb
 from fleetforge.db.engine import make_engine
 from fleetforge.kafka import offsets as kafka_offsets
 from fleetforge.observability import configure_logging
+from fleetforge.projector.main import _close_bounded
 
 log = logging.getLogger("fleetforge.missions")
 GROUP = "mission-consumer"
@@ -147,22 +150,31 @@ def run(settings: Settings, engine: Engine, stop: threading.Event, *, group: str
             idle = time.monotonic()
             for k, n in apply_events(engine, msgs, group, {topic: tid}).items():
                 totals[k] += n
-            consumer.commit(offsets=[TopicPartition(t, p, o + 1) for t, p, o, _ in msgs],
-                            asynchronous=True)  # fmt: skip
+            try:  # advisory, as in the telemetry projector: never stops the loop
+                consumer.commit(offsets=[TopicPartition(t, p, o + 1) for t, p, o, _ in msgs],
+                                asynchronous=True)  # fmt: skip
+            except KafkaException as exc:
+                log.warning("advisory Kafka offset commit failed", extra={"error": str(exc)})
     finally:
-        consumer.close()
+        _close_bounded(consumer)
     return totals
 
 
 def main() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
+    faulthandler.enable()
+    faulthandler.register(signal.SIGUSR1, all_threads=True)
     start_http_server(9102)
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
     signal.signal(signal.SIGINT, lambda *_: stop.set())
     log.info("mission consumer starting")
-    run(settings, make_engine(settings), stop)
+    try:
+        run(settings, make_engine(settings), stop)
+    except Exception:
+        log.exception("mission consumer failed; exiting so the container restarts")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

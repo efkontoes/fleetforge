@@ -25,6 +25,7 @@ x-kafka-env: &kafka-env
 
 services:
   postgres:
+    restart: unless-stopped
     image: postgres:17@sha256:ff87138949ad9a46f32ff23bd6852b52ce024a13dffe9b4087be98292cdd3b4f
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-fleetforge}
@@ -66,6 +67,7 @@ services:
       postgres: {condition: service_healthy}
 
   kafka:
+    restart: unless-stopped
     profiles: *core-profiles
     image: apache/kafka:4.3.1@sha256:77e3df9054047a88b520d0cc46e16696d3b22022e1d580aeccd2632df6532837
     environment:
@@ -119,6 +121,7 @@ services:
       kafka: {condition: service_healthy}
 
   schema-registry:
+    restart: unless-stopped
     profiles: *core-profiles
     image: quay.io/apicurio/apicurio-registry:3.3.4@sha256:3ee4423c0f212c364d9525f7ab22ae1a009f610f3e6b8fc2cdba8b2ae68de460
     environment:
@@ -149,6 +152,7 @@ services:
       schema-registry: {condition: service_healthy}
 
   api:
+    restart: unless-stopped
     profiles: *core-profiles
     image: *app-image
     command:
@@ -177,6 +181,7 @@ services:
     mem_limit: 512m
 
   projector:
+    restart: unless-stopped
     profiles: [processing, full]
     image: *app-image
     command: ["fleet-projector"]
@@ -195,6 +200,7 @@ services:
     mem_limit: 256m
 
   connect:
+    restart: unless-stopped
     profiles: [cdc, full]
     # Tag, not digest: Debezium re-pushes 3.7.1.Final daily (~00:47 UTC) and quay.io
     # garbage-collects the replaced manifests, so a digest pin breaks within a day
@@ -237,6 +243,7 @@ services:
       connect: {condition: service_healthy}
 
   mission-consumer:
+    restart: unless-stopped
     profiles: [cdc, full]
     image: *app-image
     command: ["fleet-mission-consumer"]
@@ -250,6 +257,7 @@ services:
     mem_limit: 192m
 
   kafka-exporter:
+    restart: unless-stopped
     profiles: [observability, full]
     image: danielqsj/kafka-exporter:v1.9.0@sha256:4150e46b2e9697ac30e4be8de03ec1704b4bdc7037577b83b8d35a32be298c16
     command: ["--kafka.server=kafka:9092", "--kafka.version=3.9.0"]
@@ -258,6 +266,7 @@ services:
     mem_limit: 64m
 
   ops-exporter:
+    restart: unless-stopped
     profiles: [observability, full]
     image: *app-image
     command: ["fleet-ops-exporter"]
@@ -271,6 +280,7 @@ services:
     mem_limit: 128m
 
   prometheus:
+    restart: unless-stopped
     profiles: [observability, full]
     image: prom/prometheus:v3.5.0@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996
     command:
@@ -284,6 +294,7 @@ services:
     mem_limit: 256m
 
   grafana:
+    restart: unless-stopped
     profiles: [observability, full]
     image: grafana/grafana:12.2.0@sha256:74144189b38447facf737dfd0f3906e42e0776212bf575dc3334c3609183adf7
     environment:
