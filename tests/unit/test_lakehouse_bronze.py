@@ -169,7 +169,17 @@ def test_range_predicate_and_offsets_json():
                             '{"telemetry.raw.v1": {"0": 20, "2": 5}}')  # fmt: skip
 
 
-@pytest.mark.parametrize(("topic", "topic_id"), [("t' OR '1'='1", ID), (T, "x' --"), ("", ID)])
+def test_topic_ids_from_librdkafka_are_accepted():
+    # Seen from the Milestone 2 broker through confluent-kafka: standard base64.
+    real = "0/lHs2ReR2i9LwLnxKhAcg"
+    sql = range_predicate_sql([OffsetRange(T, real, 0, 0, 1)])
+    assert f"kafka_topic_id = '{real}'" in sql
+    assert plan_topic(T, real, None, {0: Watermarks(0, 1)}).topic_id == real
+
+
+@pytest.mark.parametrize(
+    ("topic", "topic_id"), [("t' OR '1'='1", ID), (T, "x' --"), ("", ID), (T, "a\\b")]
+)
 def test_identifiers_are_validated_before_they_reach_sql(topic, topic_id):
     with pytest.raises(ValueError):
         range_predicate_sql([OffsetRange(topic, topic_id, 0, 0, 1)])

@@ -42,10 +42,11 @@ RUN_ID_PROPERTY = "fleetforge.bronze.run-id"
 RANGES_PROPERTY = "fleetforge.bronze.ranges"
 ACCEPTED_GAPS_PROPERTY = "fleetforge.bronze.accepted-gaps"
 
-# Topic names (Kafka's legal alphabet) and topic ids (base64url UUIDs). Anything else
-# is refused before it is ever placed into SQL.
+# Topic names (Kafka's legal alphabet) and topic ids (base64 UUIDs: librdkafka uses
+# the standard alphabet with + and /, Java clients the URL-safe one with - and _).
+# Anything else is refused before it is ever placed into a SQL literal.
 _TOPIC_RE = re.compile(r"^[A-Za-z0-9._-]{1,249}$")
-_TOPIC_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_TOPIC_ID_RE = re.compile(r"^[A-Za-z0-9+/_-]{1,64}={0,2}$")
 
 
 @dataclass(frozen=True)
