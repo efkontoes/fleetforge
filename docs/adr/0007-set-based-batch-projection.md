@@ -21,12 +21,13 @@ identical to one-at-a-time processing.
   statement per event) and `set`, plus `set_copy` (COPY into a temp table).
 
 ## Alternatives
-* **Loop of single-row statements inside one transaction:** 915 events/s vs
-  5,224 (set), same number of commits. Still one round trip per event.
-* **COPY + INSERT…SELECT:** measured at batch 500: 4,884 events/s vs 5,224
-  with `unnest()` (−6.5 %). Building the COPY stream in Python costs as much as
-  array binding, and the temp-table insert is extra work. Not adopted at these
-  batch sizes.
+* **Loop of single-row statements inside one transaction:** 896–1,128 events/s
+  vs 7,680–8,591 (set), with the same number of commits. Still one round trip
+  per event. (The original measurement, 915 vs 5,224, predates the audit's
+  projector CPU fix.)
+* **COPY + INSERT…SELECT:** 8,106–8,891 events/s vs 7,680–8,591 with
+  `unnest()`. Within run-to-run noise, it writes more WAL records per event
+  (1.52 vs 1.06) and adds a temp-table insert. Not adopted at these batch sizes.
 * **Write only the max per robot, without planning:** correct final row, wrong
   outcomes and versions.
 

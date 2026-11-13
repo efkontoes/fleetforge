@@ -100,6 +100,21 @@ unfenced (`FOR UPDATE` locks nothing that doesn't exist; ledger rows are now see
 first), and raw psycopg errors from set-based SQL bypassed the SQLAlchemy-typed
 exception handling.
 
+**The ledger is bound to one incarnation of the log** (final audit, ADR 0011).
+Each row stores Kafka's topic UUID. On assignment the consumer checks
+`low ≤ next_offset ≤ high`, and inside the batch transaction it checks that the
+batch starts where the ledger says. A recreated topic, a ledger ahead of the log,
+or records deleted by retention before being applied all stop the consumer with
+`OffsetLedgerError` instead of being skipped silently. Before this check, all
+three lost data without an error (reproduced against a real broker).
+
+| Ledger/log disagreement | What happens | Tested by |
+|---|---|---|
+| topic deleted and recreated | refused (`topic id` mismatch); nothing applied, nothing skipped | `test_recreated_topic_is_refused_until_an_audited_reset` |
+| ledger beyond the high watermark (legacy row, no UUID) | refused | `test_legacy_ledger_ahead_of_the_log_is_refused` |
+| retention deleted unapplied records | refused at assignment and inside the transaction | `test_records_deleted_before_being_applied_are_refused`, `test_offset_gap_stops_the_consumer_without_committing[*]` |
+| operator resets to 0 (reprocess) | honoured even though Kafka's committed offsets say otherwise | `test_reset_to_zero_reprocesses_even_if_kafka_offsets_say_otherwise` |
+
 ## Ordering
 
 * Kafka key = `robot_id`, so all events of one robot are in one partition, in the
@@ -139,9 +154,10 @@ legacy HTTP path, and the database must refuse to move backwards regardless.
 |---|---|---|---|
 | Permanent data | malformed bytes, missing field, NaN, battery 150, unknown firmware, boot-number mismatch, sequence conflict, DB constraint violation | quarantine row (`QUARANTINED`) with topic/partition/offset, payload and bytes, category, reason, consumer version | advance |
 | Permanent but `retry_eligible` | unknown robot or boot (registered later) | quarantine; `fleet-replay quarantine` re-runs them | advance |
-| Recoverable infrastructure | DB down, timeout, **schema registry unavailable** | no quarantine; pause partitions, exponential backoff, retry the same batch (lag grows = backpressure) | hold |
+| Recoverable infrastructure | DB down, timeout, **schema registry unavailable** (any transport error or non-404 answer; a 404 for a schema id is permanent only while the registry holds the topic's subject) | no quarantine; pause partitions, exponential backoff, retry the same batch (lag grows = backpressure) | hold |
 | Ordering | stale, duplicate, redelivered (`SKIPPED`) | stale recorded (`RECORDED`); duplicates/skips counted | advance |
 | Unknown exception | bug | process exits; restart resumes from the ledger | hold |
+| Position | ledger and Kafka log disagree (topic recreated, retention gap) | process stops (`OffsetLedgerError`), operator decides via audited `ledger-reset` | hold |
 
 A batch refused by the database is re-run record by record so that one poison
 record cannot block a partition (`DB_CONSTRAINT_VIOLATION`). There is deliberately
@@ -165,8 +181,17 @@ as the ledger; a DLQ topic would be a second, non-atomic write.
   offset in `_connect_offsets`.
 * WAL retention: a slot pins WAL until Debezium confirms it.
   `max_slot_wal_keep_size=2GB` caps the damage of an abandoned slot (the slot is
-  invalidated rather than filling the disk), and `ReplicationSlotRetainingWal`
-  alerts at 512 MiB.
+  invalidated rather than filling the disk). `ReplicationSlotRetainingWal` alerts
+  at 512 MiB, `ReplicationSlotNearInvalidation` when `safe_wal_size` < 512 MiB,
+  and `ReplicationSlotLost` once `wal_status = lost`.
+* Delivery is checked end to end, not inferred from connector state:
+  `fleetforge_cdc_missions_behind` / `fleetforge_cdc_oldest_undelivered_seconds`
+  compare `fleet.missions.version` with `downstream.mission_status.version`, and
+  `CdcDeliveryStalled` alerts on them. (`CdcEndToEndSlow` is computed from
+  delivered events and stays silent during a total stall.)
+* The mission consumer quarantines unparseable events in
+  `downstream.mission_event_quarantine` with their Kafka coordinates, in the
+  transaction that advances its ledger. Before the audit they were only logged.
 * Heartbeats: quiet captured tables would otherwise pin all surrounding WAL
   (measured: 531 MB). Each connector inserts into `fleet.cdc_heartbeat` every 10 s,
   so its slot advances even when no business events happen (ADR 0008).
@@ -179,11 +204,12 @@ as the ledger; a DLQ topic would be a second, non-atomic write.
 |---|---|
 | A committed robot state never moves backwards in `(boot, seq)` | yes: DB-enforced |
 | Every event's logical effect is applied at most once | yes: ledger + ordering key + conditional upsert |
-| Every published event is eventually processed or quarantined | yes, while Kafka retains it (7 days) and the projector runs |
+| Every published event is eventually processed or quarantined | yes, while Kafka retains it (7 days) and the projector runs. If retention or topic recreation removes records before they are applied, the projector **stops** (`OffsetLedgerError`, ADR 0011) instead of skipping them silently; an operator records the decision with `fleet-replay ledger-reset` |
 | Read model is current | eventually. Measured event→state latency in the benchmark report; staleness is exposed and alerted |
-| Mission events reach Kafka iff the mission change committed | yes: outbox in the same transaction (rollback test) |
+| A committed mission change has its outbox event, and a rolled-back one has none | yes: the outbox row is written in the same transaction (rollback test) |
+| That event reaches Kafka and the downstream consumer | **eventually**, while the replication slot is valid. Not atomic with the commit. Measured: Connect SIGKILLed during traffic, every transition delivered 27–46 s after restart (four runs). Stalls are detected end to end (`CdcDeliveryStalled`). If the slot is invalidated (`max_slot_wal_keep_size`), only a re-snapshot of rows still in the outbox recovers, so outbox retention refuses to run while the slot is unhealthy |
 | Mission events delivered exactly once | **no**: at-least-once; consumers deduplicate by version |
-| Producer never loses events | **no** across producer crashes (in-memory buffer); restart resends from the last acknowledged checkpoint, so duplicates and not loss |
+| Producer never loses events | **no.** Durability starts at the broker acknowledgement. A SIGKILLed producer loses its unacknowledged in-memory queue (tested). A producer that persists its last contiguous acknowledged index can resend from it, which gives duplicates (absorbed) and no loss. The simulator models this; a real robot must persist the checkpoint. An outage longer than `message.timeout.ms` (300 s) turns queued events into reported delivery failures (tested), never silent loss |
 | Survives a broker loss | **no** locally (one broker, RF=1). Production needs RF=3, `min.insync.replicas=2` |
 | Telemetry history in PostgreSQL | no, by design: Kafka retains the raw log until the M3 bronze layer persists it |
 

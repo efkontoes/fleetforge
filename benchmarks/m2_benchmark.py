@@ -84,14 +84,34 @@ def pg_counters(settle: bool = False) -> dict[str, float]:
             "SELECT xact_commit FROM pg_stat_database WHERE datname = 'fleetforge'"
         ).fetchone()
         (wal,) = c.execute("SELECT pg_wal_lsn_diff(pg_current_wal_lsn(), '0/0')").fetchone()
-    return {"xact_commit": float(xact), "wal_bytes": float(wal)}
+        records, fpi = c.execute("SELECT wal_records, wal_fpi FROM pg_stat_wal").fetchone()
+    return {
+        "xact_commit": float(xact),
+        "wal_bytes": float(wal),
+        "wal_records": float(records),
+        "wal_fpi": float(fpi),
+    }
+
+
+def checkpoint() -> None:
+    """Start every WAL measurement from the same state. Without it, whether a
+    checkpoint happens to fall inside a short window (each page's first change after
+    a checkpoint is logged as a full 8 KB image) dominates WAL bytes per event: the
+    final audit could not reproduce the earlier 653 -> 80 B/event comparison."""
+    with psycopg.connect(owner_dsn(), autocommit=True) as c:
+        c.execute("CHECKPOINT")
 
 
 def pg_delta(before: dict, after: dict, seconds: float, events: int) -> dict:
     tx = after["xact_commit"] - before["xact_commit"]
     wal = after["wal_bytes"] - before["wal_bytes"]
-    return {"transactions": int(tx), "tx_per_s": round(tx / seconds, 1),
-            "wal_bytes": int(wal), "wal_bytes_per_event": round(wal / max(events, 1), 1)}  # fmt: skip
+    out = {"transactions": int(tx), "tx_per_s": round(tx / seconds, 1),
+           "wal_bytes": int(wal), "wal_bytes_per_event": round(wal / max(events, 1), 1)}  # fmt: skip
+    if "wal_records" in before and "wal_records" in after:  # pg_stat_wal, flushed lazily
+        n = max(events, 1)
+        out["wal_records_per_event"] = round((after["wal_records"] - before["wal_records"]) / n, 2)
+        out["full_page_images_per_event"] = round((after["wal_fpi"] - before["wal_fpi"]) / n, 3)
+    return out
 
 
 def docker_stats() -> dict[str, str]:
@@ -297,7 +317,8 @@ def run_drain(a) -> dict:
         telemetry = sum(isinstance(i, Telemetry) for i in items)
         boot_numbers = register_bulk(items, API)
         topic = new_topic()
-        before = pg_counters()
+        checkpoint()
+        before = pg_counters(settle=True)
         # Consumers join and the group stabilizes BEFORE data arrives; otherwise each
         # late joiner triggers a stop-the-world rebalance inside the measured window
         # (observed: 3 consumers measured slower than 2).
@@ -309,7 +330,7 @@ def run_drain(a) -> dict:
         time.sleep(1)
         stats_mid = docker_stats()
         outs = collect(procs, q)
-        after = pg_counters()
+        after = pg_counters(settle=True)
         start = min(o["window"][0] for o in outs if o["window"][0])
         end = max(o["window"][1] for o in outs if o["window"][1])
         drain = end - start

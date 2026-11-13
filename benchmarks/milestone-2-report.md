@@ -1,217 +1,283 @@
 # Milestone 2 benchmark report
 
-Every number in this report was measured on the machine below. Raw JSON for each
-experiment is in `benchmarks/results/m2-*.json`. Estimates are labelled as such.
+Every number here was measured on the machine below. Raw JSON for each experiment
+is in `benchmarks/results/m2-*.json`; file names are given next to each table.
+Estimates are labelled as such. This version was rewritten during the final audit
+(2026-11-13). Earlier figures that did not survive re-measurement are kept at the
+end with the reason they were superseded.
 
 ## Environment
 
 | | |
 |---|---|
 | Host | Windows 11 laptop, Intel i5-10210U (4 cores / 8 threads, 1.6 GHz base), 7.8 GiB RAM |
-| WSL2 | Ubuntu 24.04, 8 vCPUs, **3.7 GiB RAM** (default 50 % limit, deliberately not raised), 1 GiB swap |
-| Storage | WSL2 ext4 virtual disk, Docker named volumes. `dd oflag=dsync`: ~2 ms per synced 8 KB write |
-| PostgreSQL | 17.11, `synchronous_commit=on`, `fsync=on`, `wal_level=logical`, 768 MiB container limit |
-| Kafka | 4.3.1 KRaft, 1 broker, RF=1, heap 384 MiB, 768 MiB limit; topics with 6 partitions |
-| Registry | Apicurio 3.3.4 (KafkaSQL) |
-| Clients | Python 3.12, confluent-kafka 2.16.1 (librdkafka 2.16.0), psycopg 3.3, SQLAlchemy 2.1 |
-| During benchmarks | Only PostgreSQL, Kafka, registry and API running (Debezium, Grafana, Prometheus, exporters stopped) |
+| WSL2 | Ubuntu 24.04, 8 vCPUs, **3.7 GiB RAM** (deliberately not raised), 1 GiB swap; Docker with cgroup v1 |
+| Storage | WSL2 ext4 virtual disk, Docker named volumes |
+| PostgreSQL | 17.11, `synchronous_commit=on`, `fsync=on`, `full_page_writes=on`, `checkpoint_timeout=5min`, 768 MiB limit |
+| Kafka | 4.3.1 KRaft, 1 broker, RF=1, heap 384 MiB, **G1** (after the audit fix; Serial before), 768 MiB limit and no swap |
+| Clients | Python 3.12, confluent-kafka 2.16.1 (librdkafka 2.16.0), fastavro 1.13.1, psycopg 3.3 |
+| Profiles | **core** (`make up-bench`: PostgreSQL, Kafka, registry, API) for all throughput numbers unless stated. **full** (+ Debezium, mission consumer, projector container, Prometheus, Grafana, exporters) where labelled: with the benchmark processes it fills the 1 GiB of swap |
 
 ## Methodology
 
-Measurement boundaries are never mixed:
-
-| Name | Starts | Ends |
+| Measurement | Starts | Ends |
 |---|---|---|
 | HTTP latency | client sends request | HTTP response (DB committed) |
-| Producer ack latency | `produce()` | broker acknowledgement (`acks=all`). Says nothing about PostgreSQL |
-| Drain throughput | first projector batch starts | last batch committed |
-| Event→state latency | Kafka CreateTime (set by the producer) | projector's `process()` returned (DB committed) |
-| PostgreSQL commits / WAL | `pg_stat_database.xact_commit` and `pg_current_wal_lsn()` deltas; counters read after an 11 s settle (backend stats flush late) |
+| Drain throughput | first projector batch starts on a pre-loaded backlog | last batch committed |
+| **Event→state latency (traced)** | the event's **scheduled** send time under the offered load | its batch's COMMIT returned (visible to every new snapshot) |
+| Durable lag | — | Σ Kafka high watermarks − Σ PostgreSQL ledger `next_offset`, sampled every second |
+| WAL | `pg_current_wal_lsn()` delta; `pg_stat_wal` records and full-page images; a `CHECKPOINT` before each drain window |
 
-* Workload: the deterministic simulator with realistic faults (1 % duplicates,
-  1 % reorders, 0.5 % invalid battery, 0.5 % malformed, 0.05 % reboots). Each run
-  has **fresh robots and a dedicated topic and consumer group**.
-* **Every run is checked against the in-memory oracle** (final state, versions).
-  All runs in this report matched.
-* The load generator is no longer the bottleneck. HTTP load comes from 4 OS
-  processes × 8 threads (0.66 cores used). Kafka production uses 2 processes
-  (~20,000 events/s available, ≥ 4× the drain rate).
-* Registration happens through the API *before* each measured window.
+Rules every run follows:
 
-Reproduce (core profile only):
+* **Fresh robots, a dedicated topic and a dedicated consumer group** per run.
+  Every run is checked against the in-memory oracle afterwards: final state,
+  `state_version` per robot, and the exact set of quarantine rows for the topic.
+  All runs in this report match.
+* **One clock.** `benchmarks/m2_traced.py` timestamps every sampled event
+  (offsets ≡ 0 mod 4, or mod 8 for the 5-minute run, chosen identically by
+  producer and projector) with `time.monotonic_ns()`. CLOCK_MONOTONIC is
+  system-wide on Linux, so producer, projector and harness processes share a
+  timeline. Kafka's millisecond wall-clock timestamps are not used.
+* **No coordinated omission.** Latency starts at the scheduled send time, so a
+  producer that falls behind is charged for it (`producer_lateness`).
+* **Bounded lag is judged over time**, by comparing mean durable lag in the first
+  and second halves of the producing window (after a 10 % warm-up) and checking
+  that the backlog drains when production stops. A p99 threshold is not used.
+* Producers generate their fleets lazily (constant memory), so runs can last
+  minutes. Workload faults: 1 % duplicates, 1 % reorders, 0.5 % invalid
+  battery, 0.5 % malformed, 0.05 % reboots.
+* Peak and sustained throughput are reported separately:
+  * **peak** = the highest 1-second processing rate, or the backlog drain rate;
+  * **sustained** = the highest *offered* rate at which lag stays bounded and
+    drains.
+
+Reproduce:
 ```bash
-make env && docker compose --profile core up -d --wait
-API_PROCESSES=4 docker compose --profile core up -d api
+make env && make up-bench                       # core profile
+API_PROCESSES=4 docker compose --profile core up -d --wait api
 python benchmarks/m2_benchmark.py http  --robots 200 --ticks 75 --processes 4 --threads 8
-python benchmarks/m2_benchmark.py drain --robots 200 --ticks 75 \
-  --modes per_event:1 loop:500 set:1 set:10 set:50 set:100 set:250 set:500 set_copy:500
-for n in 1 2 3; do python benchmarks/m2_benchmark.py drain --robots 300 --ticks 75 --consumers $n --modes set:500; done
-python benchmarks/m2_benchmark.py sustained --robots 500 --rates 2000 5000 7000 9000 --mode set:500 --consumers 3
+API_PROCESSES=2 docker compose --profile core up -d --wait api
+python benchmarks/m2_benchmark.py drain --robots 200 --ticks 75 --modes per_event:1 loop:500 set:500 set_copy:500
+python benchmarks/m2_benchmark.py drain --robots 300 --ticks 75 --consumers 3 --modes set:500
+for r in 1000 2500 7500 10000; do python benchmarks/m2_traced.py --rate $r --seconds 60 --label sustained-core-$r-60s; done
+python benchmarks/m2_traced.py --rate 5000 --seconds 300 --trace-every 8 --label sustained-core-5000-300s
+python benchmarks/m2_traced.py --rate 12500 --seconds 60 --producers 3 --label sustained-core-12500-60s
+python benchmarks/projector_gc.py               # decode/validate CPU and GC, no infrastructure
 ```
 
 ## 1. Architectures A–D on the same workload (15,000 events, 1 consumer)
 
-`m2-20261112T182603Z-http-api4.json`, `m2-20261112T184215Z-drain-sweep.json`
+`m2-20261113T003729Z-http.json`, `m2-20261113T004449Z-drain.json`,
+`m2-20261113T005341Z-drain.json` (two drain sweeps; ranges are across the two).
 
-| Arch | What | Events/s | PG commits | Commits/event | WAL bytes/event | Server-side CPU |
-|---|---|---:|---:|---:|---:|---|
-| **A** | HTTP → PostgreSQL, 1 event/tx (4 API procs, 32 client threads) | **293** | 30,381 | 2.0 ¹ | 433 | API ~0.4 cores (docker sample) |
-| **B** | Kafka → projector, 1 event/tx (`per_event`) | **50** | 15,129 | 1.0 | 653 | 0.36 cores |
-| **C** | Kafka → projector, 1 tx/batch, 1 statement/event (`loop:500`) | **915** | 31 | 0.002 | 428 | 0.50 cores |
-| **D** | Kafka → projector, set-based (`set:500`) | **5,224** | 31 | 0.002 | **80** | 0.93 cores |
-| D′ | set-based, rows staged with COPY (`set_copy:500`) | 4,884 | 31 | 0.002 | 84 | 0.90 cores |
+| Arch | What | Events/s | PG commits/event | WAL records/event ¹ |
+|---|---|---:|---:|---:|
+| **A** | HTTP → PostgreSQL, 1 event/tx (4 API processes, 32 client threads) | **330** | 2.0 ² | — |
+| **B** | Kafka → projector, 1 event/tx (`per_event`) | **51–55** | 1.0 | 6.13 |
+| **C** | Kafka → projector, 1 tx/batch, 1 statement/event (`loop:500`) | **896–1,128** | 0.002 | 3.33 |
+| **D** | Kafka → projector, set-based (`set:500`) | **7,680–8,591** | 0.002 | **1.06** |
+| D′ | set-based, rows staged with COPY (`set_copy:500`) | 8,106–8,891 | 0.002 | 1.52 |
 
-¹ `pool_pre_ping` issues an autocommit `SELECT 1` per pool checkout, which counts
-as a commit. Isolated measurement: 2.01 commits per checkout with pre-ping, 1.03
-without.
+¹ From `pg_stat_wal` after a forced `CHECKPOINT`. WAL *bytes* per event are not
+comparable over 15,000-event windows: about 0.05 full-page images per event
+(~400 B of 8 KB page images) dominate every mode equally. The sustained runs
+(§3) give the bytes that matter operationally.
+² `pool_pre_ping` adds an autocommit `SELECT 1` per pool checkout.
 
-**Reading the table: Kafka vs batching.**
-* **A → B (Kafka, no batching): 6× slower.** HTTP had 32 concurrent writers whose
-  commits PostgreSQL could flush together (group commit). One consumer committing
-  per event is a single serial writer: ~20 ms per event (decode, ledger
-  lock/advance, lookups, upsert, ~4.6 ms commit). **Kafka is not automatically
-  faster than HTTP.**
-* **B → C (transaction batching): 18×.** One WAL flush per 500 events instead of
-  per event, but still one network round trip per statement per event.
-* **C → D (set-based SQL): 5.7×.** A constant number of statements per batch, and
-  one row write per robot per batch.
-* **WAL per event: 653 → 80 bytes (8×).** Superseded events never become row
-  versions or index entries.
-* **COPY vs `unnest()`:** COPY was 6.5 % slower at 500 rows. Building the COPY
-  stream in Python costs as much as binding arrays, and adds a temp-table insert.
-  Not adopted.
+**Why Kafka alone was slower than HTTP (A → B, 6× slower).** HTTP had 32
+concurrent writers whose commits PostgreSQL flushes together (group commit).
+One consumer committing per event is a single serial writer: decode, ledger
+lock and advance, lookups, upsert and a ~4–6 ms WAL flush, for every event.
+Kafka adds buffering, replay and decoupling. Speed comes only from what the
+consumer does with them.
 
-### Batch size sweep (mode `set`)
-
-| Batch | 1 | 10 | 50 | 100 | 250 | 500 |
-|---|---:|---:|---:|---:|---:|---:|
-| Events/s | 49 | 382 | 1,922 | 2,740 | 4,407 | **5,224** |
-| Transactions | 15,155 | 1,515 | 303 | 152 | 61 | 31 |
-| COMMIT p50 (ms) | 4.79 | 5.15 | 4.04 | 4.06 | 3.99 | 4.21 |
-| WAL bytes/event | 750 | 365 | 235 | 149 | 112 | 80 |
-| Projector CPU (cores) | 0.35 | 0.46 | 0.60 | 0.67 | 0.86 | 0.93 |
-
-```mermaid
-xychart-beta
-    title "Drain throughput vs batch size (set mode, 1 consumer)"
-    x-axis "batch size" [1, 10, 50, 100, 250, 500]
-    y-axis "events/s" 0 --> 5500
-    bar [49, 382, 1922, 2740, 4407, 5224]
-```
-
-**COMMIT latency is flat at ~4–5 ms regardless of batch size.** The flush cost is
-per transaction, so throughput rises until the projector's own CPU is the limit:
-0.93 cores at batch 500, effectively one saturated Python process.
+**Why set-based batching gave the largest gain.**
+* B → C (one transaction per 500 events): 17–21×, one WAL flush per batch
+  instead of per event.
+* C → D (constant number of statements per batch, one row write per robot
+  per batch): a further 7–8×, with 3× fewer WAL records per event. D is then
+  CPU-bound in Python, which is why the projector fix (§4) raised D from the
+  earlier 5,224 to 7,680–8,591 events/s.
 
 ## 2. Consumer concurrency (set:500, 22,500 events)
 
-`m2-…-drain-scale-c{1,2,3}.json`. Consumers join the group *before* the backlog
-arrives. The first attempt started them while the backlog was already there:
-late joiners caused a stop-the-world rebalance inside the measured window, and
-3 consumers measured slower than 2. That result was discarded as a measurement
-artefact and the harness fixed.
+`m2-20261113T005458Z-drain.json` (1 consumer), `m2-20261113T005551Z-drain.json`
+(3 consumers). Consumers join before the backlog arrives.
 
-| Consumers | Events/s | Projector CPU (cores) | Avg batch |
-|---:|---:|---:|---:|
-| 1 | 3,836 | 0.84 | 494 |
-| 2 | 6,564 | 1.70 | 484 |
-| 3 | **9,280** | 2.49 | 473 |
+| Consumers | Drain events/s |
+|---:|---:|
+| 1 | 5,928 ³ |
+| 3 | **11,771** (was 9,280 before the projector fix) |
 
-Near-linear scaling: robots are partitioned, so consumers never contend for rows.
-(Single-consumer throughput is lower than in §1 because the producers' burst
-overlaps the first ~20 % of this shorter drain.)
+³ On this shorter workload the producers' burst overlaps the first part of the
+drain. The §1 workload measures 1-consumer capacity more cleanly.
 
-## 3. Sustained ingestion: does it keep up at 5,000 events/s?
+## 3. Sustained ingestion
 
-500 robots, producer paced for 30 s, 3 projector processes running throughout
-(`m2-20261112T185714Z-sustained-c3-final.json`, `m2-…-c3-5k-rep{1,2,3}.json`).
+`m2-…-traced-sustained-core-{1000,2500,7500,10000}-60s.json`,
+`m2-20261113T002429Z-traced-sustained-core-5000-300s.json`,
+`m2-…-traced-sustained-core-{12500,15000}-60s.json`.
+Core profile, 3 projector processes, `set:500`, 50 ms flush, 1,000 robots,
+2 producer processes (3 above 10,000/s).
 
-| Target | Achieved produce rate | Event→state p50 | p95 | p99 | Max | Producer ack p50 / p99 | Projector CPU | Kept up |
-|---:|---:|---:|---:|---:|---:|---|---:|---|
-| 2,000 | 1,938 | 93 ms | 151 ms | 185 ms | 0.26 s | 13 / 23 ms | 0.95 | yes |
-| 5,000 | 4,753 | 144 ms | 942 ms | **2,105 ms** | 2.53 s | 13 / **1,820** ms | 1.41 | yes |
-| 5,000 (rep 1) | 4,611 | 129 ms | 200 ms | 241 ms | 0.33 s | 12 / 22 ms | 1.37 | yes |
-| 5,000 (rep 2) | 4,998 | 130 ms | 213 ms | 274 ms | 0.42 s | 12 / 22 ms | 1.39 | yes |
-| 5,000 (rep 3) | 4,939 | 124 ms | 194 ms | 242 ms | 0.40 s | 12 / 22 ms | 1.35 | yes |
-| 7,000 | 6,912 | 199 ms | 544 ms | 768 ms | 0.92 s | 12 / 100 ms | 1.87 | yes |
-| 9,000 | 8,818 | 389 ms | 876 ms | 1,285 ms | 1.67 s | 12 / 97 ms | 2.39 | yes |
+| Offered | Duration | Achieved | Processed | Event→state p50 / p95 / p99 / max | Lag mean 1st → 2nd half | Max lag | Drain after stop | Verdict |
+|---:|---:|---:|---:|---|---:|---:|---:|---|
+| 1,000 | 61 s | 999 | 1,000 | 72 / 118 / 190 / 339 ms | 57 → 56 | 148 | 0.3 s | stable |
+| 2,500 | 61 s | 2,499 | 2,498 | 73 / 112 / 127 / 209 ms | 136 → 147 | 274 | 0.2 s | stable |
+| **5,000** | **303 s** | **4,998** | **5,000** | **86 / 179 / 350 / 686 ms** | **394 → 373** | 2,019 | 0.2 s | **stable** |
+| 7,500 | 61 s | 7,493 | 7,491 | 108 / 187 / 262 / 418 ms | 602 → 862 | 2,759 | 0.0 s | stable (lag returned to < 1,000) |
+| **10,000** | 61 s | 9,992 | 9,962 | 147 / 247 / 470 / 773 ms | 1,431 → 1,386 | 5,089 | 1.0 s | **stable** |
+| 12,500 | 61 s | 12,462 | 12,227 | 202 / — / 1,650 / 1,864 ms | 1,715 → **11,984** | 19,190 | 1.8 s | **not sustainable**: lag grows |
+| 15,000 | 68 s | 13,336 | 9,920 | 9.7 s / — / 23.6 s / 24.2 s | 35,771 → 144,529 | 207,820 | 12.6 s | **overloaded**: the producers fall 8 s behind schedule; host load 9.3 |
 
-**Result.** The design target of **5,000 events/s is sustained end to end**:
-produced to Kafka, validated, and committed to PostgreSQL, with every event
-accounted for and the final state equal to the oracle. Typical p99 event→state
-is ~250 ms. Measured up to ~8,800 events/s on this laptop, still keeping up.
+* **Sustained throughput: 10,000 events/s** is the highest tested rate where lag
+  stays bounded (60 s run). **5,000 events/s was held for 5 minutes**
+  (1,515,049 events). Between 10,000 and 12,500 the 4-core host saturates: at
+  12,500 every batch is full (493 of 500) and host load is 6.3.
+* **Peak throughput:** 13,201 events/s in the best 1-second window (10,000/s
+  run), and 11,771 events/s backlog drain with 3 consumers (§2).
+* **Every event accounted for**, for example at 5,000/s × 303 s: generated
+  1,515,049 = acknowledged = consumed = high watermark = durably applied (ledger).
+  Quarantine rows equal the oracle's exactly.
 
-**The outlier.** One of four 5,000/s runs had a 2.1 s p99. In that run the
-*producer's* acknowledgement p99 was 1,820 ms (vs ~22 ms otherwise). The stall was
-on the producer→broker side (host or Kafka I/O), not in the projector, and the
-event→state latency includes it because it is measured from producer time.
-On a shared laptop VM such tails are expected. Production would need a dedicated
-broker disk and repeated runs to characterise tail latency properly.
+**The 5-minute run, hop by hop** (189,383 sampled events, ms):
 
-**Where the time goes at 5,000/s.** Batches are much smaller than 500 when the
-consumer keeps up (records arrive at ~1,700/s per consumer), so the
-`flush_interval` (50 ms in the benchmark) and the commit (~4 ms) dominate
-event→state latency, not CPU.
+| Segment | p50 | p95 | p99 | p99.9 | max |
+|---|---:|---:|---:|---:|---:|
+| producer lateness vs schedule | −0.3 | 0.3 | 14 | 343 | 522 |
+| produce() → broker ack | 13 | 22 | 23 | 47 | 526 |
+| produce() → projector receipt | 55 | 103 | 187 | 300 | 396 |
+| receipt → batch start | 0.4 | 1.1 | 9.9 | 19 | 148 |
+| decode + validate (per batch) | 7.0 | 19 | 40 | 75 | 99 |
+| SQL inside the transaction | 17 | 38 | 65 | 128 | 276 |
+| COMMIT | 4.2 | 10 | 90 | 257 | 295 |
+| **scheduled → committed** | **86** | **179** | **350** | **520** | **686** |
 
-## 4. Recovery (from the failure tests, same machine)
+Resources in that run:
+* CPU: projector 0.27 cores per process, producer 0.49 per process (means);
+  Kafka 0.43 cores, PostgreSQL 0.30 cores (docker samples).
+* PostgreSQL: **72 commits/s**, mean batch 142 events.
+* WAL: **335 B/event, 1.7 MB/s**. Batches are small when consumers keep up,
+  so the per-transaction overhead and page images are not amortised over 500
+  events. Consequence: the 2 GB `max_slot_wal_keep_size` lasts only about
+  **20 minutes** of Debezium downtime at this rate (runbook).
+* Memory: container peaks Kafka 495 MiB, PostgreSQL 416 MiB, registry 223 MiB,
+  API 149 MiB; each projector process peaked at 113 MiB RSS. Minimum
+  `MemAvailable` on the host was 1,172 MiB.
+
+## 4. The latency tail: investigation and fix
+
+Details, method and per-run evidence are in the audit
+(`docs/reviews/milestone-2-final-audit.md` §8). In short:
+
+**Root causes, by evidence:**
+1. **Broker stop-the-world GC.** With a 768 MiB container the JVM picked the
+   **Serial** collector. Its Full GCs froze the broker:
+   * **2,104.13 ms at 18:53:23**, inside the original 5,000/s run whose p99 was
+     **2,104.56 ms**;
+   * **11,772.8 ms** during the first traced run of this audit.
+
+   That pause used 2.9 s of CPU and 11.8 s of wall time: the heap was being
+   paged in from a full swap. Excerpt: `m2-kafka-broker-gc-serial-excerpt.txt`
+   (7 Full GCs of 0.5–11.8 s in one day).
+2. **Projector CPU and queueing under contention.** Each projector process
+   spent ~130 µs CPU per event in decode/validate, about 25 % of it in
+   confluent-kafka's per-message data-contract machinery we do not use. On
+   top of that came a 60–160 ms gen-2 GC every ~2.5 s. On a host already
+   overcommitted by the full profile, records waited in Kafka for a busy
+   consumer: `produce→receipt` dominated every remaining episode, with durable
+   lag up to 14,207.
+3. **Cold start** (minor). The first 2–4 s of a fresh projector (connections,
+   schema fetch, cache fill, one start-up GC) produced one 1.9 s episode in
+   five core-profile runs. A long-running service pays this once per restart.
+
+**Fixes** (smallest corrections; no queues made larger, nothing dropped):
+* broker on G1 with Kafka's documented settings, and no swap for its container;
+* the projector decodes with fastavro directly (proved byte-identical to
+  AvroDeserializer) and builds audit payloads only for rejected records:
+  **132 → 36 µs CPU/event** (`benchmarks/projector_gc.py`);
+* `gc.freeze()` of the start-up heap: gen-2 pause max **39 → 0.8 ms** in the
+  micro-benchmark.
+
+**Before and after, 5,000 events/s, 60 s runs:**
+
+| Series | Broker GC | Projector | Profile | Runs | p50 | p99 | max | Runs with a > 1 s episode |
+|---|---|---|---|---:|---:|---:|---:|---:|
+| `prefix-serialgc-5000` | Serial | before | full | 5 | 138–532 ms | 557–3,120 ms | 0.80–3.45 s | **4** |
+| `full-allfixes-5000` | G1 | after | full | 5 | 82–103 ms | 200–621 ms | 0.34–0.94 s | **0** |
+| `core-g1broker-oldprojector-5000` ⁴ | G1 | before | core | 5 | 138–153 ms | 334–1,617 ms | 0.46–1.94 s | 1 (cold start) |
+| `core-g1broker-projfix-5000` ⁴ | G1 | after | core | 3 | 81–82 ms | 206–482 ms | 0.34–0.94 s | 0 |
+
+⁴ These two series were labelled "serialgc" when they ran. The broker had in
+fact already been recreated with the G1 fix (container start 23:34:12Z, GC log
+"Using G1"). The files were relabelled, with a note inside each.
+
+Since the fix, the broker's G1 log over all post-fix load (390 pauses) shows a
+maximum pause of 393 ms (3 pauses over 100 ms, all under swap pressure), against
+Serial Full GCs of 2–11.8 s. **A Serial/G1 A/B within this audit was not run:**
+Serial Full GCs occurred about every 20–60 minutes of load, so a 15-minute A/B
+would most likely show nothing. The attribution rests on the GC-log timestamps
+and on the mechanism, not on a controlled A/B. Two causes of tails remain:
+memory pressure on this laptop, and cold starts.
+
+## 5. Recovery (from the failure tests)
 
 | Scenario | Measured |
 |---|---|
-| PostgreSQL stopped 7.0 s while Kafka kept accepting | 7 retries, 0 records quarantined; backlog of 1,592 drained 3.2 s after restart; state = oracle |
-| Kafka stopped 8 s during publishing | no acknowledgement for the whole outage; all messages acknowledged exactly once after restart; state = oracle |
-| Projector crash after DB commit | resume from ledger: 0 records reprocessed. Trusting Kafka offsets instead: whole batch redelivered, 100 % `SKIPPED` |
-| Debezium (Connect) restart | 43 s to `RUNNING` (6 s stop + 37 s JVM start); events committed meanwhile delivered in order, none lost |
-| Backlog drain rate | = drain throughput above: ~3,800 events/s per consumer, ~9,300 events/s with 3 |
-
-## 5. Milestone 1 → Milestone 2
-
-| | Milestone 1 (measured) | Milestone 2 (measured) |
-|---|---|---|
-| Best ingestion into PostgreSQL | 354 events/s (4 API procs; client-bound) / 293 events/s (this report, client not bound) | 9,280 events/s drain (3 consumers), 8,818 events/s sustained |
-| At the 5,000 events/s target | not reachable | sustained; p99 event→state ~0.25 s (one run in four: 2.1 s) |
-| Commits per event | 1 (+1 pre-ping) | 0.002 |
-| WAL per event | 433 B | 80 B (backlog drain, batch 500) |
-| Database outage | 503 to producers (they must buffer) | Kafka buffers; automatic catch-up |
+| PostgreSQL stopped while Kafka kept accepting | no records quarantined, no offsets advanced; backlog drained after restart, state = oracle (`junit-stack-disruptive.xml`) |
+| Kafka stopped 8 s during publishing | no acknowledgement during the outage; all messages acknowledged exactly once afterwards |
+| Kafka stopped 10 s with `message.timeout.ms=3000` | queued events reported as **delivery failures** (not silent); resent from the checkpoint; state = oracle |
+| Producer SIGKILLed | acknowledged ≤ in Kafka < produced; resend from the last contiguous acknowledged index; state = oracle |
+| Projector crash after DB commit | resume from the ledger: 0 records re-read |
+| Kafka Connect SIGKILLed during mission traffic | stall visible end to end after 17–25 s (oldest undelivered change > 15 s; two runs); all missions downstream 27–46 s after restart (four runs; last: 163 missions) |
+| Backlog drain rate | 11,771 events/s with 3 consumers |
 
 ## 6. Bottleneck analysis
 
-1. **Single-row durable commits** (M1, and B). A ~4.6 ms flush per event, removed by
-   batching. Evidence: flat COMMIT latency across batch sizes; throughput
-   proportional to events per commit until the CPU limit.
-2. **Round trips per event** (C). Removed by set-based SQL. Evidence: C vs D at the
-   same transaction count.
-3. **Python CPU in the projector** (D). Avro decoding, validation and planning cost
-   ~0.18–0.27 cores per 1,000 events/s. Evidence: 0.93 cores at 5,224 events/s
-   with one process; linear scaling with processes. PostgreSQL ran at
-   ~40–90 commits/s and low CPU during these tests: it is not the bottleneck.
-4. **Shared 4-core host.** Producers, Kafka, three projectors and PostgreSQL all
-   compete for the same cores. This is the limit for further local scaling.
+1. **Single-row durable commits** (B): one ~4–6 ms WAL flush per event.
+   Removed by batching.
+2. **Round trips per event** (C): removed by set-based SQL.
+3. **Python CPU in the projector** (D): ~0.15 cores per 1,000 events/s for all
+   projector work. Measured: 0.27 cores per process at 1,670 events/s each
+   (5,000/s over 3 processes), and 0.48 cores at 3,330 events/s each (10,000/s).
+   Decode and validate alone are now 36 µs/event (0.036 cores per 1,000/s). The
+   rest is consuming, building SQL parameters and the driver.
+4. **The shared 4-core host.** Above ~10,000 events/s, producers, broker,
+   projectors and PostgreSQL saturate the same cores (load 6.3 at 12,500/s).
+   PostgreSQL ran at **54–86 commits/s** in every sustained run: it is not the
+   bottleneck.
 
 ## 7. Capacity projection (estimate, not measured)
 
-Assuming per-process cost stays ~0.27 cores per 1,000 events/s and PostgreSQL is
-on its own disk: 6 projector processes (one per partition) on 2 dedicated cores
-each would sustain roughly **15,000–20,000 events/s** before needing more
-partitions. PostgreSQL would then commit ~40–60 batches/s, far from its limit.
-Untested assumptions: network latency to a managed database (RDS adds ~1 ms per
-round trip, which matters only for the per-event modes), Kafka with RF=3 (higher
-ack latency), and larger robots-per-batch fan-out.
+At ~0.15 cores per 1,000 events/s, one projector process on a dedicated core
+would top out around 6,000 events/s. Six processes, one per partition, on six
+dedicated cores: roughly **30,000–35,000 events/s** before more partitions are
+needed. PostgreSQL would then commit ~60–100 batches/s at batch 500, far from
+its limit. At that point the single broker with RF = 1 on one disk is the next
+constraint. Untested assumptions: RF = 3 acknowledgement
+latency, a managed database's network round trips, larger fleets per batch.
 
 ## 8. Decisions taken from these numbers
 
-* Default projector mode `set`, batch 500, flush interval 200 ms in deployment
-  (latency vs efficiency); scale by replicas up to the partition count.
-* Keep `unnest()`; do not adopt COPY at these batch sizes.
-* Keep `pool_pre_ping`: it costs one round trip per *checkout* (once per batch in
-  the projector) and is what makes recovery from a database restart transparent.
-* Cost/resource trade-off: Kafka + registry + Connect add ~1.5 GiB of RAM to the
-  stack. In return they buy buffering, replay, CDC and ~30× ingestion capacity.
-  Below ~300 events/s with no need for replay or CDC, Milestone 1's HTTP path is
-  simpler and cheaper.
+* Projector mode `set`, batch 500. Flush interval 50 ms in benchmarks; 200 ms
+  in deployment trades latency for fewer transactions.
+* Keep `unnest()`. COPY is within noise at 500 rows, writes more WAL records,
+  and adds a temporary table.
+* The broker must not run on Serial GC, and its heap must not swap.
+* Size `max_slot_wal_keep_size` from the measured WAL rate (1.7 MB/s at
+  5,000/s) × the longest CDC outage to tolerate.
 
-## Superseded raw files (kept for transparency)
+## Superseded figures (kept for transparency)
 
-| File | Why it is not used |
-|---|---|
-| `m2-…184248Z-drain-consumers2-SUPERSEDED-…json`, `m2-…184306Z-drain-consumers3-SUPERSEDED-…json` | Consumers started while the backlog was already present; late joiners caused rebalances inside the measured window (3 consumers measured slower than 2). Replaced by `drain-scale-c{1,2,3}`. |
-| `m2-…185054Z-sustained-c3-SUPERSEDED-…json` | 5,000 and 7,000/s runs whose "achieved rate" included forking and pickling the producer workload, understating it. (An earlier attempt crashed before saving: the projectors idled out while the producers were still being forked.) Replaced by `sustained-c3-final` and the three 5k repeats. |
+| Earlier claim | Status | Why |
+|---|---|---|
+| 5,000/s sustained with "typical p99 ≈ 250 ms; one run in four 2.1 s; the stall was producer→broker" | **cause corrected** | The 2.1 s was a broker Full GC (Serial collector), matched to the millisecond in the GC log. "Producer→broker" named the symptom. |
+| `kept_up = p99 < 2 s` | **method replaced** | Not a stability test. Replaced by durable lag over time. |
+| Event→state measured from Kafka CreateTime | **method replaced** | Coordinated omission: a late producer hid its own delay. Now measured from the scheduled send time. |
+| "Drop the first 10 % of samples" warm-up trim | **bug** | It ran on the concatenation of per-consumer lists, so it trimmed only the first consumer's samples. |
+| D (set:500) 5,224 events/s; 3 consumers 9,280 | **superseded** | Re-measured after the projector CPU fix: 7,680–8,591 and 11,771. |
+| WAL 653 → 80 B/event (8×) | **not reproduced** | Short windows are dominated by full-page images, depending on where the window falls relative to a checkpoint. Re-measured as WAL *records* per event: 6.13 → 1.06 (6×). |
+| Up to ~8,800 events/s "still keeping up" | **superseded** | Judged by p99 only. With lag-over-time, 10,000/s is the highest stable tested rate after the fixes. |
+| Files `…184248Z-drain-consumers2-SUPERSEDED…`, `…184306Z-drain-consumers3-SUPERSEDED…`, `…185054Z-sustained-c3-SUPERSEDED…` | superseded earlier | See the file names: late-joining consumers; producer timer including fork/pickle. |
+| `m2-20261112T185714Z-sustained-c3-final.json`, `…c3-5k-rep{1,2,3}.json`, the 2026-11-12 drain sweeps and HTTP run | **historical** | Kept unchanged as raw data; they ran on the Serial-GC broker and the earlier projector. |

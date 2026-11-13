@@ -1,0 +1,1805 @@
+{
+  "experiment": "traced sustained rate",
+  "args": {
+    "rate": 7500,
+    "seconds": 60,
+    "repeat": 1,
+    "consumers": 3,
+    "producers": 2,
+    "robots": 1000,
+    "mode": "set:500",
+    "flush_s": 0.05,
+    "idle_s": 25.0,
+    "trace_every": 4,
+    "threshold_s": 1.0,
+    "producer_conf": [],
+    "label": "sustained-core-7500-60s",
+    "seed": 29471
+  },
+  "environment": {
+    "platform": "Linux-5.15.146.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+    "cpu": "Intel(R) Core(TM) i5-10210U CPU @ 1.60GHz",
+    "vcpus": 8,
+    "wsl_mem_total": "3901516 kB",
+    "swap_total": "1048576 kB",
+    "storage": "WSL2 ext4 virtual disk (Docker named volumes)",
+    "postgres": "postgres (PostgreSQL) 17.11 (Debian 17.11-1.pgdg13+2)",
+    "kafka_image": "apache/kafka:4.3.1 (KRaft, 1 broker, RF=1)",
+    "python": "3.12.3",
+    "docker_limits": "postgres 768m, kafka 768m (heap 384m), registry 448m, api 512m"
+  },
+  "runs": [
+    {
+      "label": "sustained-core-7500-60s",
+      "run": 0,
+      "seed": 29471,
+      "target_rate_eps": 7500,
+      "duration_target_s": 60,
+      "producer_active_s": 60.7,
+      "config": {
+        "mode": "set:500",
+        "consumers": 3,
+        "producers": 2,
+        "robots": 1000,
+        "flush_interval_s": 0.05,
+        "trace_every": 4,
+        "producer_conf": {}
+      },
+      "counts": {
+        "generated": 454554,
+        "acknowledged": 454554,
+        "produce_failed": 0,
+        "consumed_records": 454554,
+        "durably_processed_offsets": 454554,
+        "high_watermark": 454554,
+        "faults_injected": {
+          "none": 441039,
+          "missing_field": 2186,
+          "invalid_battery": 2249,
+          "reordered": 4526,
+          "duplicate": 4554
+        },
+        "sampled_events_joined": 113641
+      },
+      "throughput": {
+        "achieved_produce_eps": 7492.8,
+        "processed_eps_during_produce": 7491.1,
+        "peak_1s_processed_eps": 9716
+      },
+      "lag": {
+        "max_after_warmup": 2759,
+        "mean_first_half": 601.8,
+        "mean_second_half": 862.0,
+        "at_producer_end": 980,
+        "drain_after_producer_end_s": 0.01
+      },
+      "producer": {
+        "max_behind_schedule_s": 0.069,
+        "backpressure_waits": 0,
+        "ack_p99_ms": [
+          22.23,
+          22.31
+        ],
+        "cpu_s": 73.0
+      },
+      "projector": {
+        "batches": 1835,
+        "retries": 0,
+        "cpu_s": 65.0,
+        "max_rss_mb": 107.5,
+        "gc_pauses_over_1ms": 121,
+        "gc_max_ms": 68.0,
+        "rebalance_callbacks": 8,
+        "consume_gap_ms": {
+          "p50": 81.8,
+          "p95": 118.09,
+          "p99": 185.57,
+          "p999": 237.03,
+          "max": 260.01,
+          "n": 3594
+        },
+        "batch_size_mean": 247.7
+      },
+      "cpu_cores_mean": {
+        "projector": 0.35,
+        "producer": 0.6
+      },
+      "cpu_cores_p95": {
+        "projector": 0.42,
+        "producer": 0.67
+      },
+      "monitor_broker_timeouts": [],
+      "mem_available_mb_min": 1292,
+      "postgres": {
+        "transactions": 3912,
+        "tx_per_s": 64.5,
+        "wal_bytes": 167340992,
+        "wal_bytes_per_event": 368.1
+      },
+      "latency_ms": {
+        "producer_lateness": {
+          "p50": -0.31,
+          "p95": 0.28,
+          "p99": 1.85,
+          "p999": 45.27,
+          "max": 68.48,
+          "n": 113641
+        },
+        "enqueue_to_ack": {
+          "p50": 12.32,
+          "p95": 21.45,
+          "p99": 22.29,
+          "p999": 31.22,
+          "max": 56.15,
+          "n": 113641
+        },
+        "enqueue_to_receive": {
+          "p50": 61.94,
+          "p95": 115.82,
+          "p99": 156.82,
+          "p999": 207.03,
+          "max": 268.33,
+          "n": 113641
+        },
+        "receive_to_batch": {
+          "p50": 0.6,
+          "p95": 1.21,
+          "p99": 9.92,
+          "p999": 19.42,
+          "max": 22.19,
+          "n": 113641
+        },
+        "decode_validate": {
+          "p50": 12.2,
+          "p95": 22.87,
+          "p99": 31.14,
+          "p999": 35.66,
+          "max": 50.32,
+          "n": 113641
+        },
+        "sql_in_tx": {
+          "p50": 25.06,
+          "p95": 40.68,
+          "p99": 48.35,
+          "p999": 59.41,
+          "max": 64.59,
+          "n": 113641
+        },
+        "commit": {
+          "p50": 4.54,
+          "p95": 16.78,
+          "p99": 92.76,
+          "p999": 157.38,
+          "max": 169.77,
+          "n": 113641
+        },
+        "e2e_from_enqueue": {
+          "p50": 107.83,
+          "p95": 186.39,
+          "p99": 259.39,
+          "p999": 364.71,
+          "max": 417.91,
+          "n": 113641
+        },
+        "e2e_from_schedule": {
+          "p50": 107.54,
+          "p95": 186.65,
+          "p99": 261.91,
+          "p999": 364.46,
+          "max": 417.74,
+          "n": 113641
+        }
+      },
+      "outlier_threshold_s": 1.0,
+      "outlier_episodes": [],
+      "timeseries_1s": [
+        {
+          "s": 0,
+          "n_sampled": 1437,
+          "max_e2e_ms": 317.4,
+          "worst_breakdown_ms": {
+            "producer_lateness": 55.4,
+            "enqueue_to_ack": 30.1,
+            "enqueue_to_receive": 162.1,
+            "receive_to_batch": 0.9,
+            "decode_validate": 27.2,
+            "sql_in_tx": 59.4,
+            "commit": 12.4,
+            "e2e_from_enqueue": 262.0,
+            "e2e_from_schedule": 317.4
+          },
+          "durable_lag": 0,
+          "cpu": {},
+          "load1": 2.60009765625
+        },
+        {
+          "s": 1,
+          "n_sampled": 1879,
+          "max_e2e_ms": 293.6,
+          "worst_breakdown_ms": {
+            "producer_lateness": 0.1,
+            "enqueue_to_ack": 19.0,
+            "enqueue_to_receive": 208.1,
+            "receive_to_batch": 0.9,
+            "decode_validate": 28.0,
+            "sql_in_tx": 48.1,
+            "commit": 8.5,
+            "e2e_from_enqueue": 293.5,
+            "e2e_from_schedule": 293.6
+          },
+          "durable_lag": 820,
+          "cpu": {
+            "projector0": 0.28,
+            "projector1": 0.29,
+            "projector2": 0.31,
+            "producer0": 0.62,
+            "producer1": 0.61
+          },
+          "load1": 2.60009765625
+        },
+        {
+          "s": 2,
+          "n_sampled": 1967,
+          "max_e2e_ms": 206.6,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.4,
+            "enqueue_to_ack": 48.3,
+            "enqueue_to_receive": 139.3,
+            "receive_to_batch": 0.9,
+            "decode_validate": 22.3,
+            "sql_in_tx": 40.7,
+            "commit": 3.8,
+            "e2e_from_enqueue": 207.0,
+            "e2e_from_schedule": 206.6
+          },
+          "durable_lag": 775,
+          "cpu": {
+            "projector0": 0.33,
+            "projector1": 0.35,
+            "projector2": 0.37,
+            "producer0": 0.62,
+            "producer1": 0.61
+          },
+          "load1": 2.60009765625
+        },
+        {
+          "s": 3,
+          "n_sampled": 1796,
+          "max_e2e_ms": 161.5,
+          "worst_breakdown_ms": {
+            "producer_lateness": 0.1,
+            "enqueue_to_ack": 21.7,
+            "enqueue_to_receive": 116.9,
+            "receive_to_batch": 0.6,
+            "decode_validate": 10.5,
+            "sql_in_tx": 29.0,
+            "commit": 4.4,
+            "e2e_from_enqueue": 161.5,
+            "e2e_from_schedule": 161.5
+          },
+          "durable_lag": 448,
+          "cpu": {
+            "projector0": 0.33,
+            "projector1": 0.39,
+            "projector2": 0.41,
+            "producer0": 0.6,
+            "producer1": 0.63
+          },
+          "load1": 2.60009765625
+        },
+        {
+          "s": 4,
+          "n_sampled": 1856,
+          "max_e2e_ms": 228.0,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.5,
+            "enqueue_to_ack": 21.7,
+            "enqueue_to_receive": 163.9,
+            "receive_to_batch": 1.0,
+            "decode_validate": 21.0,
+            "sql_in_tx": 38.4,
+            "commit": 4.3,
+            "e2e_from_enqueue": 228.6,
+            "e2e_from_schedule": 228.0
+          },
+          "durable_lag": 716,
+          "cpu": {
+            "projector0": 0.31,
+            "projector1": 0.32,
+            "projector2": 0.31,
+            "producer0": 0.57,
+            "producer1": 0.55
+          },
+          "load1": 2.60009765625
+        },
+        {
+          "s": 5,
+          "n_sampled": 1955,
+          "max_e2e_ms": 182.9,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.2,
+            "enqueue_to_ack": 21.4,
+            "enqueue_to_receive": 139.6,
+            "receive_to_batch": 0.7,
+            "decode_validate": 10.8,
+            "sql_in_tx": 27.4,
+            "commit": 4.6,
+            "e2e_from_enqueue": 183.1,
+            "e2e_from_schedule": 182.9
+          },
+          "durable_lag": 800,
+          "cpu": {
+            "projector0": 0.29,
+            "projector1": 0.32,
+            "projector2": 0.31,
+            "producer0": 0.57,
+            "producer1": 0.57
+          },
+          "load1": 2.79248046875
+        },
+        {
+          "s": 6,
+          "n_sampled": 1877,
+          "max_e2e_ms": 161.9,
+          "worst_breakdown_ms": {
+            "producer_lateness": 0.5,
+            "enqueue_to_ack": 21.1,
+            "enqueue_to_receive": 117.5,
+            "receive_to_batch": 0.5,
+            "decode_validate": 11.2,
+            "sql_in_tx": 26.4,
+            "commit": 5.9,
+            "e2e_from_enqueue": 161.5,
+            "e2e_from_schedule": 161.9
+          },
+          "durable_lag": 479,
+          "cpu": {
+            "projector0": 0.3,
+            "projector1": 0.31,
+            "projector2": 0.31,
+            "producer0": 0.54,
+            "producer1": 0.53
+          },
+          "load1": 2.79248046875
+        },
+        {
+          "s": 7,
+          "n_sampled": 1856,
+          "max_e2e_ms": 183.0,
+          "worst_breakdown_ms": {
+            "producer_lateness": 0.1,
+            "enqueue_to_ack": 22.0,
+            "enqueue_to_receive": 125.7,
+            "receive_to_batch": 0.9,
+            "decode_validate": 20.0,
+            "sql_in_tx": 32.0,
+            "commit": 4.2,
+            "e2e_from_enqueue": 182.9,
+            "e2e_from_schedule": 183.0
+          },
+          "durable_lag": 485,
+          "cpu": {
+            "projector0": 0.32,
+            "projector1": 0.31,
+            "projector2": 0.33,
+            "producer0": 0.55,
+            "producer1": 0.55
+          },
+          "load1": 2.79248046875
+        },
+        {
+          "s": 8,
+          "n_sampled": 1923,
+          "max_e2e_ms": 275.2,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.7,
+            "enqueue_to_ack": 20.1,
+            "enqueue_to_receive": 212.6,
+            "receive_to_batch": 0.8,
+            "decode_validate": 22.7,
+            "sql_in_tx": 35.2,
+            "commit": 4.6,
+            "e2e_from_enqueue": 275.8,
+            "e2e_from_schedule": 275.2
+          },
+          "durable_lag": 589,
+          "cpu": {
+            "projector0": 0.32,
+            "projector1": 0.33,
+            "projector2": 0.32,
+            "producer0": 0.56,
+            "producer1": 0.57
+          },
+          "load1": 2.79248046875
+        },
+        {
+          "s": 9,
+          "n_sampled": 1795,
+          "max_e2e_ms": 162.8,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.1,
+            "enqueue_to_ack": 21.2,
+            "enqueue_to_receive": 114.7,
+            "receive_to_batch": 0.7,
+            "decode_validate": 16.8,
+            "sql_in_tx": 22.4,
+            "commit": 8.3,
+            "e2e_from_enqueue": 162.9,
+            "e2e_from_schedule": 162.8
+          },
+          "durable_lag": 394,
+          "cpu": {
+            "projector0": 0.3,
+            "projector1": 0.33,
+            "projector2": 0.34,
+            "producer0": 0.57,
+            "producer1": 0.57
+          },
+          "load1": 2.79248046875
+        },
+        {
+          "s": 10,
+          "n_sampled": 1899,
+          "max_e2e_ms": 194.6,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.5,
+            "enqueue_to_ack": 37.2,
+            "enqueue_to_receive": 142.9,
+            "receive_to_batch": 0.5,
+            "decode_validate": 13.6,
+            "sql_in_tx": 30.9,
+            "commit": 7.3,
+            "e2e_from_enqueue": 195.2,
+            "e2e_from_schedule": 194.6
+          },
+          "durable_lag": 709,
+          "cpu": {
+            "projector0": 0.32,
+            "projector1": 0.32,
+            "projector2": 0.34,
+            "producer0": 0.55,
+            "producer1": 0.56
+          },
+          "load1": 2.8896484375
+        },
+        {
+          "s": 11,
+          "n_sampled": 1907,
+          "max_e2e_ms": 171.5,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.6,
+            "enqueue_to_ack": 21.0,
+            "enqueue_to_receive": 125.5,
+            "receive_to_batch": 0.5,
+            "decode_validate": 14.4,
+            "sql_in_tx": 25.0,
+            "commit": 6.7,
+            "e2e_from_enqueue": 172.1,
+            "e2e_from_schedule": 171.5
+          },
+          "durable_lag": 591,
+          "cpu": {
+            "projector0": 0.29,
+            "projector1": 0.31,
+            "projector2": 0.33,
+            "producer0": 0.55,
+            "producer1": 0.56
+          },
+          "load1": 2.8896484375
+        },
+        {
+          "s": 12,
+          "n_sampled": 1808,
+          "max_e2e_ms": 157.9,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.7,
+            "enqueue_to_ack": 21.5,
+            "enqueue_to_receive": 120.0,
+            "receive_to_batch": 0.5,
+            "decode_validate": 12.2,
+            "sql_in_tx": 21.3,
+            "commit": 4.6,
+            "e2e_from_enqueue": 158.5,
+            "e2e_from_schedule": 157.9
+          },
+          "durable_lag": 492,
+          "cpu": {
+            "projector0": 0.33,
+            "projector1": 0.34,
+            "projector2": 0.33,
+            "producer0": 0.55,
+            "producer1": 0.55
+          },
+          "load1": 2.8896484375
+        },
+        {
+          "s": 13,
+          "n_sampled": 1941,
+          "max_e2e_ms": 260.4,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.1,
+            "enqueue_to_ack": 22.2,
+            "enqueue_to_receive": 196.8,
+            "receive_to_batch": 0.7,
+            "decode_validate": 21.5,
+            "sql_in_tx": 36.3,
+            "commit": 5.2,
+            "e2e_from_enqueue": 260.5,
+            "e2e_from_schedule": 260.4
+          },
+          "durable_lag": 736,
+          "cpu": {
+            "projector0": 0.29,
+            "projector1": 0.29,
+            "projector2": 0.31,
+            "producer0": 0.53,
+            "producer1": 0.52
+          },
+          "load1": 2.8896484375
+        },
+        {
+          "s": 14,
+          "n_sampled": 1867,
+          "max_e2e_ms": 162.8,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.6,
+            "enqueue_to_ack": 21.4,
+            "enqueue_to_receive": 109.3,
+            "receive_to_batch": 13.7,
+            "decode_validate": 12.8,
+            "sql_in_tx": 23.5,
+            "commit": 4.1,
+            "e2e_from_enqueue": 163.4,
+            "e2e_from_schedule": 162.8
+          },
+          "durable_lag": 484,
+          "cpu": {
+            "projector0": 0.31,
+            "projector1": 0.29,
+            "projector2": 0.34,
+            "producer0": 0.56,
+            "producer1": 0.57
+          },
+          "load1": 2.8896484375
+        },
+        {
+          "s": 15,
+          "n_sampled": 1832,
+          "max_e2e_ms": 160.3,
+          "worst_breakdown_ms": {
+            "producer_lateness": 0.1,
+            "enqueue_to_ack": 19.2,
+            "enqueue_to_receive": 116.7,
+            "receive_to_batch": 0.4,
+            "decode_validate": 10.3,
+            "sql_in_tx": 26.6,
+            "commit": 6.1,
+            "e2e_from_enqueue": 160.2,
+            "e2e_from_schedule": 160.3
+          },
+          "durable_lag": 540,
+          "cpu": {
+            "projector0": 0.31,
+            "projector1": 0.31,
+            "projector2": 0.34,
+            "producer0": 0.55,
+            "producer1": 0.55
+          },
+          "load1": 3.05908203125
+        },
+        {
+          "s": 16,
+          "n_sampled": 1939,
+          "max_e2e_ms": 155.5,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.5,
+            "enqueue_to_ack": 21.3,
+            "enqueue_to_receive": 115.5,
+            "receive_to_batch": 0.7,
+            "decode_validate": 10.2,
+            "sql_in_tx": 25.2,
+            "commit": 4.4,
+            "e2e_from_enqueue": 156.0,
+            "e2e_from_schedule": 155.5
+          },
+          "durable_lag": 709,
+          "cpu": {
+            "projector0": 0.3,
+            "projector1": 0.32,
+            "projector2": 0.29,
+            "producer0": 0.55,
+            "producer1": 0.55
+          },
+          "load1": 3.05908203125
+        },
+        {
+          "s": 17,
+          "n_sampled": 1866,
+          "max_e2e_ms": 152.5,
+          "worst_breakdown_ms": {
+            "producer_lateness": 0.0,
+            "enqueue_to_ack": 17.5,
+            "enqueue_to_receive": 114.3,
+            "receive_to_batch": 0.5,
+            "decode_validate": 11.4,
+            "sql_in_tx": 22.1,
+            "commit": 4.2,
+            "e2e_from_enqueue": 152.5,
+            "e2e_from_schedule": 152.5
+          },
+          "durable_lag": 479,
+          "cpu": {
+            "projector0": 0.3,
+            "projector1": 0.31,
+            "projector2": 0.29,
+            "producer0": 0.53,
+            "producer1": 0.54
+          },
+          "load1": 3.05908203125
+        },
+        {
+          "s": 18,
+          "n_sampled": 1914,
+          "max_e2e_ms": 221.0,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.7,
+            "enqueue_to_ack": 21.7,
+            "enqueue_to_receive": 173.7,
+            "receive_to_batch": 0.5,
+            "decode_validate": 13.4,
+            "sql_in_tx": 28.4,
+            "commit": 5.7,
+            "e2e_from_enqueue": 221.7,
+            "e2e_from_schedule": 221.0
+          },
+          "durable_lag": 681,
+          "cpu": {
+            "projector0": 0.3,
+            "projector1": 0.3,
+            "projector2": 0.3,
+            "producer0": 0.52,
+            "producer1": 0.51
+          },
+          "load1": 3.05908203125
+        },
+        {
+          "s": 19,
+          "n_sampled": 1864,
+          "max_e2e_ms": 150.2,
+          "worst_breakdown_ms": {
+            "producer_lateness": 0.2,
+            "enqueue_to_ack": 20.8,
+            "enqueue_to_receive": 117.1,
+            "receive_to_batch": 0.5,
+            "decode_validate": 10.2,
+            "sql_in_tx": 18.0,
+            "commit": 4.2,
+            "e2e_from_enqueue": 150.0,
+            "e2e_from_schedule": 150.2
+          },
+          "durable_lag": 576,
+          "cpu": {
+            "projector0": 0.3,
+            "projector1": 0.32,
+            "projector2": 0.33,
+            "producer0": 0.56,
+            "producer1": 0.56
+          },
+          "load1": 3.05908203125
+        },
+        {
+          "s": 20,
+          "n_sampled": 1834,
+          "max_e2e_ms": 147.2,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.2,
+            "enqueue_to_ack": 21.7,
+            "enqueue_to_receive": 108.6,
+            "receive_to_batch": 0.4,
+            "decode_validate": 9.4,
+            "sql_in_tx": 24.7,
+            "commit": 4.2,
+            "e2e_from_enqueue": 147.4,
+            "e2e_from_schedule": 147.2
+          },
+          "durable_lag": 367,
+          "cpu": {
+            "projector0": 0.3,
+            "projector1": 0.32,
+            "projector2": 0.29,
+            "producer0": 0.55,
+            "producer1": 0.54
+          },
+          "load1": 3.134765625
+        },
+        {
+          "s": 21,
+          "n_sampled": 1834,
+          "max_e2e_ms": 161.6,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.7,
+            "enqueue_to_ack": 18.9,
+            "enqueue_to_receive": 118.5,
+            "receive_to_batch": 0.8,
+            "decode_validate": 14.0,
+            "sql_in_tx": 24.5,
+            "commit": 4.5,
+            "e2e_from_enqueue": 162.3,
+            "e2e_from_schedule": 161.6
+          },
+          "durable_lag": 534,
+          "cpu": {
+            "projector0": 0.27,
+            "projector1": 0.3,
+            "projector2": 0.31,
+            "producer0": 0.54,
+            "producer1": 0.55
+          },
+          "load1": 3.134765625
+        },
+        {
+          "s": 22,
+          "n_sampled": 1893,
+          "max_e2e_ms": 151.7,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.1,
+            "enqueue_to_ack": 22.1,
+            "enqueue_to_receive": 102.0,
+            "receive_to_batch": 0.5,
+            "decode_validate": 9.4,
+            "sql_in_tx": 36.1,
+            "commit": 3.9,
+            "e2e_from_enqueue": 151.8,
+            "e2e_from_schedule": 151.7
+          },
+          "durable_lag": 726,
+          "cpu": {
+            "projector0": 0.31,
+            "projector1": 0.32,
+            "projector2": 0.33,
+            "producer0": 0.55,
+            "producer1": 0.54
+          },
+          "load1": 3.134765625
+        },
+        {
+          "s": 23,
+          "n_sampled": 1876,
+          "max_e2e_ms": 173.2,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.5,
+            "enqueue_to_ack": 21.1,
+            "enqueue_to_receive": 131.1,
+            "receive_to_batch": 0.5,
+            "decode_validate": 12.0,
+            "sql_in_tx": 25.4,
+            "commit": 4.7,
+            "e2e_from_enqueue": 173.7,
+            "e2e_from_schedule": 173.2
+          },
+          "durable_lag": 670,
+          "cpu": {
+            "projector0": 0.28,
+            "projector1": 0.31,
+            "projector2": 0.29,
+            "producer0": 0.53,
+            "producer1": 0.54
+          },
+          "load1": 3.134765625
+        },
+        {
+          "s": 24,
+          "n_sampled": 1889,
+          "max_e2e_ms": 254.2,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.7,
+            "enqueue_to_ack": 21.2,
+            "enqueue_to_receive": 193.3,
+            "receive_to_batch": 1.1,
+            "decode_validate": 19.8,
+            "sql_in_tx": 36.0,
+            "commit": 4.6,
+            "e2e_from_enqueue": 254.9,
+            "e2e_from_schedule": 254.2
+          },
+          "durable_lag": 602,
+          "cpu": {
+            "projector0": 0.32,
+            "projector1": 0.31,
+            "projector2": 0.34,
+            "producer0": 0.55,
+            "producer1": 0.55
+          },
+          "load1": 3.134765625
+        },
+        {
+          "s": 25,
+          "n_sampled": 1894,
+          "max_e2e_ms": 157.1,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.5,
+            "enqueue_to_ack": 18.6,
+            "enqueue_to_receive": 114.8,
+            "receive_to_batch": 0.5,
+            "decode_validate": 11.5,
+            "sql_in_tx": 26.7,
+            "commit": 4.1,
+            "e2e_from_enqueue": 157.6,
+            "e2e_from_schedule": 157.1
+          },
+          "durable_lag": 611,
+          "cpu": {
+            "projector0": 0.32,
+            "projector1": 0.31,
+            "projector2": 0.33,
+            "producer0": 0.55,
+            "producer1": 0.54
+          },
+          "load1": 3.5244140625
+        },
+        {
+          "s": 26,
+          "n_sampled": 1879,
+          "max_e2e_ms": 153.2,
+          "worst_breakdown_ms": {
+            "producer_lateness": 0.1,
+            "enqueue_to_ack": 21.2,
+            "enqueue_to_receive": 97.3,
+            "receive_to_batch": 2.2,
+            "decode_validate": 19.2,
+            "sql_in_tx": 29.2,
+            "commit": 5.4,
+            "e2e_from_enqueue": 153.1,
+            "e2e_from_schedule": 153.2
+          },
+          "durable_lag": 705,
+          "cpu": {
+            "projector0": 0.32,
+            "projector1": 0.33,
+            "projector2": 0.3,
+            "producer0": 0.54,
+            "producer1": 0.56
+          },
+          "load1": 3.5244140625
+        },
+        {
+          "s": 27,
+          "n_sampled": 1882,
+          "max_e2e_ms": 180.9,
+          "worst_breakdown_ms": {
+            "producer_lateness": 10.5,
+            "enqueue_to_ack": 21.6,
+            "enqueue_to_receive": 117.9,
+            "receive_to_batch": 0.8,
+            "decode_validate": 11.6,
+            "sql_in_tx": 29.3,
+            "commit": 10.8,
+            "e2e_from_enqueue": 170.4,
+            "e2e_from_schedule": 180.9
+          },
+          "durable_lag": 683,
+          "cpu": {
+            "projector0": 0.3,
+            "projector1": 0.32,
+            "projector2": 0.33,
+            "producer0": 0.58,
+            "producer1": 0.57
+          },
+          "load1": 3.5244140625
+        },
+        {
+          "s": 28,
+          "n_sampled": 1832,
+          "max_e2e_ms": 177.7,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.1,
+            "enqueue_to_ack": 21.8,
+            "enqueue_to_receive": 125.6,
+            "receive_to_batch": 0.6,
+            "decode_validate": 17.7,
+            "sql_in_tx": 28.9,
+            "commit": 5.0,
+            "e2e_from_enqueue": 177.8,
+            "e2e_from_schedule": 177.7
+          },
+          "durable_lag": 442,
+          "cpu": {
+            "projector0": 0.28,
+            "projector1": 0.3,
+            "projector2": 0.32,
+            "producer0": 0.54,
+            "producer1": 0.54
+          },
+          "load1": 3.5244140625
+        },
+        {
+          "s": 29,
+          "n_sampled": 1817,
+          "max_e2e_ms": 218.3,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.4,
+            "enqueue_to_ack": 21.3,
+            "enqueue_to_receive": 144.9,
+            "receive_to_batch": 1.4,
+            "decode_validate": 33.6,
+            "sql_in_tx": 33.9,
+            "commit": 4.8,
+            "e2e_from_enqueue": 218.6,
+            "e2e_from_schedule": 218.3
+          },
+          "durable_lag": 647,
+          "cpu": {
+            "projector0": 0.36,
+            "projector1": 0.35,
+            "projector2": 0.36,
+            "producer0": 0.63,
+            "producer1": 0.61
+          },
+          "load1": 3.5244140625
+        },
+        {
+          "s": 30,
+          "n_sampled": 1904,
+          "max_e2e_ms": 288.3,
+          "worst_breakdown_ms": {
+            "producer_lateness": 0.4,
+            "enqueue_to_ack": 20.7,
+            "enqueue_to_receive": 211.1,
+            "receive_to_batch": 1.0,
+            "decode_validate": 25.6,
+            "sql_in_tx": 44.1,
+            "commit": 6.2,
+            "e2e_from_enqueue": 287.9,
+            "e2e_from_schedule": 288.3
+          },
+          "durable_lag": 868,
+          "cpu": {
+            "projector0": 0.39,
+            "projector1": 0.39,
+            "projector2": 0.41,
+            "producer0": 0.65,
+            "producer1": 0.65
+          },
+          "load1": 3.72265625
+        },
+        {
+          "s": 31,
+          "n_sampled": 1883,
+          "max_e2e_ms": 218.8,
+          "worst_breakdown_ms": {
+            "producer_lateness": 0.0,
+            "enqueue_to_ack": 17.8,
+            "enqueue_to_receive": 148.4,
+            "receive_to_batch": 1.3,
+            "decode_validate": 24.6,
+            "sql_in_tx": 39.1,
+            "commit": 5.3,
+            "e2e_from_enqueue": 218.8,
+            "e2e_from_schedule": 218.8
+          },
+          "durable_lag": 742,
+          "cpu": {
+            "projector0": 0.35,
+            "projector1": 0.36,
+            "projector2": 0.38,
+            "producer0": 0.64,
+            "producer1": 0.64
+          },
+          "load1": 3.72265625
+        },
+        {
+          "s": 32,
+          "n_sampled": 1676,
+          "max_e2e_ms": 408.5,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.3,
+            "enqueue_to_ack": 22.1,
+            "enqueue_to_receive": 162.9,
+            "receive_to_batch": 0.8,
+            "decode_validate": 20.9,
+            "sql_in_tx": 54.4,
+            "commit": 169.8,
+            "e2e_from_enqueue": 408.8,
+            "e2e_from_schedule": 408.5
+          },
+          "durable_lag": 707,
+          "cpu": {
+            "projector0": 0.39,
+            "projector1": 0.41,
+            "projector2": 0.45,
+            "producer0": 0.67,
+            "producer1": 0.66
+          },
+          "load1": 3.72265625
+        },
+        {
+          "s": 33,
+          "n_sampled": 2119,
+          "max_e2e_ms": 417.7,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.2,
+            "enqueue_to_ack": 21.5,
+            "enqueue_to_receive": 268.3,
+            "receive_to_batch": 1.8,
+            "decode_validate": 32.1,
+            "sql_in_tx": 48.0,
+            "commit": 67.7,
+            "e2e_from_enqueue": 417.9,
+            "e2e_from_schedule": 417.7
+          },
+          "durable_lag": 2759,
+          "cpu": {
+            "projector0": 0.36,
+            "projector1": 0.35,
+            "projector2": 0.34,
+            "producer0": 0.68,
+            "producer1": 0.68
+          },
+          "load1": 3.72265625
+        },
+        {
+          "s": 34,
+          "n_sampled": 1852,
+          "max_e2e_ms": 183.4,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.5,
+            "enqueue_to_ack": 20.6,
+            "enqueue_to_receive": 127.4,
+            "receive_to_batch": 0.7,
+            "decode_validate": 13.1,
+            "sql_in_tx": 28.0,
+            "commit": 14.7,
+            "e2e_from_enqueue": 183.9,
+            "e2e_from_schedule": 183.4
+          },
+          "durable_lag": 565,
+          "cpu": {
+            "projector0": 0.36,
+            "projector1": 0.4,
+            "projector2": 0.42,
+            "producer0": 0.61,
+            "producer1": 0.6
+          },
+          "load1": 3.72265625
+        },
+        {
+          "s": 35,
+          "n_sampled": 1884,
+          "max_e2e_ms": 406.1,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.0,
+            "enqueue_to_ack": 21.2,
+            "enqueue_to_receive": 192.6,
+            "receive_to_batch": 1.0,
+            "decode_validate": 21.7,
+            "sql_in_tx": 33.4,
+            "commit": 157.4,
+            "e2e_from_enqueue": 406.1,
+            "e2e_from_schedule": 406.1
+          },
+          "durable_lag": 892,
+          "cpu": {
+            "projector0": 0.37,
+            "projector1": 0.37,
+            "projector2": 0.36,
+            "producer0": 0.62,
+            "producer1": 0.62
+          },
+          "load1": 3.8251953125
+        },
+        {
+          "s": 36,
+          "n_sampled": 1853,
+          "max_e2e_ms": 195.8,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.3,
+            "enqueue_to_ack": 22.3,
+            "enqueue_to_receive": 130.4,
+            "receive_to_batch": 1.0,
+            "decode_validate": 21.0,
+            "sql_in_tx": 37.5,
+            "commit": 6.1,
+            "e2e_from_enqueue": 196.1,
+            "e2e_from_schedule": 195.8
+          },
+          "durable_lag": 648,
+          "cpu": {
+            "projector0": 0.34,
+            "projector1": 0.33,
+            "projector2": 0.34,
+            "producer0": 0.63,
+            "producer1": 0.63
+          },
+          "load1": 3.8251953125
+        },
+        {
+          "s": 37,
+          "n_sampled": 1811,
+          "max_e2e_ms": 263.2,
+          "worst_breakdown_ms": {
+            "producer_lateness": 0.1,
+            "enqueue_to_ack": 21.8,
+            "enqueue_to_receive": 189.1,
+            "receive_to_batch": 1.3,
+            "decode_validate": 25.4,
+            "sql_in_tx": 42.0,
+            "commit": 5.3,
+            "e2e_from_enqueue": 263.1,
+            "e2e_from_schedule": 263.2
+          },
+          "durable_lag": 673,
+          "cpu": {
+            "projector0": 0.38,
+            "projector1": 0.4,
+            "projector2": 0.4,
+            "producer0": 0.65,
+            "producer1": 0.66
+          },
+          "load1": 3.8251953125
+        },
+        {
+          "s": 38,
+          "n_sampled": 1958,
+          "max_e2e_ms": 178.3,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.7,
+            "enqueue_to_ack": 19.9,
+            "enqueue_to_receive": 124.0,
+            "receive_to_batch": 0.8,
+            "decode_validate": 17.4,
+            "sql_in_tx": 32.7,
+            "commit": 4.1,
+            "e2e_from_enqueue": 179.0,
+            "e2e_from_schedule": 178.3
+          },
+          "durable_lag": 953,
+          "cpu": {
+            "projector0": 0.37,
+            "projector1": 0.42,
+            "projector2": 0.41,
+            "producer0": 0.66,
+            "producer1": 0.65
+          },
+          "load1": 3.8251953125
+        },
+        {
+          "s": 39,
+          "n_sampled": 1873,
+          "max_e2e_ms": 195.6,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.1,
+            "enqueue_to_ack": 20.4,
+            "enqueue_to_receive": 121.2,
+            "receive_to_batch": 11.9,
+            "decode_validate": 17.5,
+            "sql_in_tx": 35.8,
+            "commit": 9.5,
+            "e2e_from_enqueue": 195.7,
+            "e2e_from_schedule": 195.6
+          },
+          "durable_lag": 624,
+          "cpu": {
+            "projector0": 0.36,
+            "projector1": 0.33,
+            "projector2": 0.37,
+            "producer0": 0.6,
+            "producer1": 0.62
+          },
+          "load1": 3.8251953125
+        },
+        {
+          "s": 40,
+          "n_sampled": 1848,
+          "max_e2e_ms": 202.2,
+          "worst_breakdown_ms": {
+            "producer_lateness": 0.4,
+            "enqueue_to_ack": 21.8,
+            "enqueue_to_receive": 137.1,
+            "receive_to_batch": 0.6,
+            "decode_validate": 23.6,
+            "sql_in_tx": 35.3,
+            "commit": 5.1,
+            "e2e_from_enqueue": 201.8,
+            "e2e_from_schedule": 202.2
+          },
+          "durable_lag": 616,
+          "cpu": {
+            "projector0": 0.35,
+            "projector1": 0.37,
+            "projector2": 0.38,
+            "producer0": 0.62,
+            "producer1": 0.61
+          },
+          "load1": 3.6787109375
+        },
+        {
+          "s": 41,
+          "n_sampled": 1863,
+          "max_e2e_ms": 200.3,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.0,
+            "enqueue_to_ack": 22.9,
+            "enqueue_to_receive": 136.3,
+            "receive_to_batch": 0.7,
+            "decode_validate": 17.7,
+            "sql_in_tx": 41.0,
+            "commit": 4.5,
+            "e2e_from_enqueue": 200.3,
+            "e2e_from_schedule": 200.3
+          },
+          "durable_lag": 722,
+          "cpu": {
+            "projector0": 0.34,
+            "projector1": 0.38,
+            "projector2": 0.39,
+            "producer0": 0.62,
+            "producer1": 0.61
+          },
+          "load1": 3.6787109375
+        },
+        {
+          "s": 42,
+          "n_sampled": 1893,
+          "max_e2e_ms": 215.7,
+          "worst_breakdown_ms": {
+            "producer_lateness": 0.2,
+            "enqueue_to_ack": 21.4,
+            "enqueue_to_receive": 140.4,
+            "receive_to_batch": 1.2,
+            "decode_validate": 24.9,
+            "sql_in_tx": 43.7,
+            "commit": 5.2,
+            "e2e_from_enqueue": 215.5,
+            "e2e_from_schedule": 215.7
+          },
+          "durable_lag": 786,
+          "cpu": {
+            "projector0": 0.36,
+            "projector1": 0.37,
+            "projector2": 0.37,
+            "producer0": 0.62,
+            "producer1": 0.63
+          },
+          "load1": 3.6787109375
+        },
+        {
+          "s": 43,
+          "n_sampled": 1615,
+          "max_e2e_ms": 229.3,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.4,
+            "enqueue_to_ack": 21.4,
+            "enqueue_to_receive": 148.5,
+            "receive_to_batch": 0.7,
+            "decode_validate": 18.2,
+            "sql_in_tx": 50.9,
+            "commit": 11.4,
+            "e2e_from_enqueue": 229.7,
+            "e2e_from_schedule": 229.3
+          },
+          "durable_lag": 713,
+          "cpu": {
+            "projector0": 0.42,
+            "projector1": 0.41,
+            "projector2": 0.46,
+            "producer0": 0.66,
+            "producer1": 0.66
+          },
+          "load1": 3.6787109375
+        },
+        {
+          "s": 44,
+          "n_sampled": 2092,
+          "max_e2e_ms": 295.2,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.3,
+            "enqueue_to_ack": 20.9,
+            "enqueue_to_receive": 144.2,
+            "receive_to_batch": 1.6,
+            "decode_validate": 22.0,
+            "sql_in_tx": 35.6,
+            "commit": 92.0,
+            "e2e_from_enqueue": 295.4,
+            "e2e_from_schedule": 295.2
+          },
+          "durable_lag": 1766,
+          "cpu": {
+            "projector0": 0.4,
+            "projector1": 0.4,
+            "projector2": 0.4,
+            "producer0": 0.67,
+            "producer1": 0.68
+          },
+          "load1": 3.6787109375
+        },
+        {
+          "s": 45,
+          "n_sampled": 1942,
+          "max_e2e_ms": 189.3,
+          "worst_breakdown_ms": {
+            "producer_lateness": 0.4,
+            "enqueue_to_ack": 18.1,
+            "enqueue_to_receive": 129.9,
+            "receive_to_batch": 1.1,
+            "decode_validate": 17.9,
+            "sql_in_tx": 35.0,
+            "commit": 4.9,
+            "e2e_from_enqueue": 188.8,
+            "e2e_from_schedule": 189.3
+          },
+          "durable_lag": 877,
+          "cpu": {
+            "projector0": 0.38,
+            "projector1": 0.38,
+            "projector2": 0.41,
+            "producer0": 0.64,
+            "producer1": 0.64
+          },
+          "load1": 3.70458984375
+        },
+        {
+          "s": 46,
+          "n_sampled": 1881,
+          "max_e2e_ms": 188.5,
+          "worst_breakdown_ms": {
+            "producer_lateness": 0.1,
+            "enqueue_to_ack": 22.7,
+            "enqueue_to_receive": 132.6,
+            "receive_to_batch": 1.1,
+            "decode_validate": 19.9,
+            "sql_in_tx": 30.0,
+            "commit": 4.8,
+            "e2e_from_enqueue": 188.4,
+            "e2e_from_schedule": 188.5
+          },
+          "durable_lag": 619,
+          "cpu": {
+            "projector0": 0.36,
+            "projector1": 0.37,
+            "projector2": 0.4,
+            "producer0": 0.64,
+            "producer1": 0.64
+          },
+          "load1": 3.70458984375
+        },
+        {
+          "s": 47,
+          "n_sampled": 1873,
+          "max_e2e_ms": 171.1,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.2,
+            "enqueue_to_ack": 21.5,
+            "enqueue_to_receive": 124.4,
+            "receive_to_batch": 1.0,
+            "decode_validate": 13.6,
+            "sql_in_tx": 28.0,
+            "commit": 4.4,
+            "e2e_from_enqueue": 171.3,
+            "e2e_from_schedule": 171.1
+          },
+          "durable_lag": 860,
+          "cpu": {
+            "projector0": 0.35,
+            "projector1": 0.36,
+            "projector2": 0.36,
+            "producer0": 0.59,
+            "producer1": 0.59
+          },
+          "load1": 3.70458984375
+        },
+        {
+          "s": 48,
+          "n_sampled": 1799,
+          "max_e2e_ms": 230.5,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.5,
+            "enqueue_to_ack": 23.1,
+            "enqueue_to_receive": 150.6,
+            "receive_to_batch": 0.9,
+            "decode_validate": 25.4,
+            "sql_in_tx": 46.8,
+            "commit": 7.2,
+            "e2e_from_enqueue": 231.0,
+            "e2e_from_schedule": 230.5
+          },
+          "durable_lag": 596,
+          "cpu": {
+            "projector0": 0.32,
+            "projector1": 0.34,
+            "projector2": 0.35,
+            "producer0": 0.59,
+            "producer1": 0.59
+          },
+          "load1": 3.70458984375
+        },
+        {
+          "s": 49,
+          "n_sampled": 1941,
+          "max_e2e_ms": 210.7,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.4,
+            "enqueue_to_ack": 15.8,
+            "enqueue_to_receive": 149.2,
+            "receive_to_batch": 1.0,
+            "decode_validate": 19.6,
+            "sql_in_tx": 36.8,
+            "commit": 4.6,
+            "e2e_from_enqueue": 211.2,
+            "e2e_from_schedule": 210.7
+          },
+          "durable_lag": 900,
+          "cpu": {
+            "projector0": 0.39,
+            "projector1": 0.42,
+            "projector2": 0.41,
+            "producer0": 0.67,
+            "producer1": 0.67
+          },
+          "load1": 3.70458984375
+        },
+        {
+          "s": 50,
+          "n_sampled": 1784,
+          "max_e2e_ms": 178.6,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.2,
+            "enqueue_to_ack": 20.7,
+            "enqueue_to_receive": 133.9,
+            "receive_to_batch": 0.6,
+            "decode_validate": 12.6,
+            "sql_in_tx": 27.5,
+            "commit": 4.3,
+            "e2e_from_enqueue": 178.8,
+            "e2e_from_schedule": 178.6
+          },
+          "durable_lag": 654,
+          "cpu": {
+            "projector0": 0.36,
+            "projector1": 0.37,
+            "projector2": 0.39,
+            "producer0": 0.65,
+            "producer1": 0.66
+          },
+          "load1": 3.80859375
+        },
+        {
+          "s": 51,
+          "n_sampled": 1983,
+          "max_e2e_ms": 235.4,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.7,
+            "enqueue_to_ack": 21.7,
+            "enqueue_to_receive": 180.9,
+            "receive_to_batch": 0.8,
+            "decode_validate": 18.7,
+            "sql_in_tx": 31.2,
+            "commit": 4.5,
+            "e2e_from_enqueue": 236.0,
+            "e2e_from_schedule": 235.4
+          },
+          "durable_lag": 1029,
+          "cpu": {
+            "projector0": 0.38,
+            "projector1": 0.42,
+            "projector2": 0.39,
+            "producer0": 0.66,
+            "producer1": 0.66
+          },
+          "load1": 3.80859375
+        },
+        {
+          "s": 52,
+          "n_sampled": 1860,
+          "max_e2e_ms": 180.4,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.1,
+            "enqueue_to_ack": 21.0,
+            "enqueue_to_receive": 119.9,
+            "receive_to_batch": 0.9,
+            "decode_validate": 12.5,
+            "sql_in_tx": 25.6,
+            "commit": 21.6,
+            "e2e_from_enqueue": 180.5,
+            "e2e_from_schedule": 180.4
+          },
+          "durable_lag": 593,
+          "cpu": {
+            "projector0": 0.38,
+            "projector1": 0.4,
+            "projector2": 0.39,
+            "producer0": 0.65,
+            "producer1": 0.66
+          },
+          "load1": 3.80859375
+        },
+        {
+          "s": 53,
+          "n_sampled": 1851,
+          "max_e2e_ms": 184.1,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.5,
+            "enqueue_to_ack": 20.9,
+            "enqueue_to_receive": 127.7,
+            "receive_to_batch": 0.6,
+            "decode_validate": 18.3,
+            "sql_in_tx": 33.1,
+            "commit": 4.9,
+            "e2e_from_enqueue": 184.6,
+            "e2e_from_schedule": 184.1
+          },
+          "durable_lag": 642,
+          "cpu": {
+            "projector0": 0.34,
+            "projector1": 0.35,
+            "projector2": 0.39,
+            "producer0": 0.6,
+            "producer1": 0.59
+          },
+          "load1": 3.80859375
+        },
+        {
+          "s": 54,
+          "n_sampled": 1876,
+          "max_e2e_ms": 171.3,
+          "worst_breakdown_ms": {
+            "producer_lateness": 0.0,
+            "enqueue_to_ack": 21.5,
+            "enqueue_to_receive": 113.2,
+            "receive_to_batch": 0.5,
+            "decode_validate": 15.6,
+            "sql_in_tx": 29.5,
+            "commit": 12.5,
+            "e2e_from_enqueue": 171.3,
+            "e2e_from_schedule": 171.3
+          },
+          "durable_lag": 742,
+          "cpu": {
+            "projector0": 0.34,
+            "projector1": 0.35,
+            "projector2": 0.39,
+            "producer0": 0.61,
+            "producer1": 0.61
+          },
+          "load1": 3.80859375
+        },
+        {
+          "s": 55,
+          "n_sampled": 1878,
+          "max_e2e_ms": 185.0,
+          "worst_breakdown_ms": {
+            "producer_lateness": 0.1,
+            "enqueue_to_ack": 21.4,
+            "enqueue_to_receive": 136.6,
+            "receive_to_batch": 0.6,
+            "decode_validate": 15.1,
+            "sql_in_tx": 28.0,
+            "commit": 4.6,
+            "e2e_from_enqueue": 184.9,
+            "e2e_from_schedule": 185.0
+          },
+          "durable_lag": 719,
+          "cpu": {
+            "projector0": 0.35,
+            "projector1": 0.37,
+            "projector2": 0.35,
+            "producer0": 0.6,
+            "producer1": 0.61
+          },
+          "load1": 3.66357421875
+        },
+        {
+          "s": 56,
+          "n_sampled": 1825,
+          "max_e2e_ms": 205.2,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.3,
+            "enqueue_to_ack": 21.8,
+            "enqueue_to_receive": 145.4,
+            "receive_to_batch": 0.7,
+            "decode_validate": 18.1,
+            "sql_in_tx": 36.4,
+            "commit": 4.9,
+            "e2e_from_enqueue": 205.5,
+            "e2e_from_schedule": 205.2
+          },
+          "durable_lag": 742,
+          "cpu": {
+            "projector0": 0.35,
+            "projector1": 0.37,
+            "projector2": 0.36,
+            "producer0": 0.61,
+            "producer1": 0.61
+          },
+          "load1": 3.66357421875
+        },
+        {
+          "s": 57,
+          "n_sampled": 1957,
+          "max_e2e_ms": 227.2,
+          "worst_breakdown_ms": {
+            "producer_lateness": -0.0,
+            "enqueue_to_ack": 21.8,
+            "enqueue_to_receive": 142.1,
+            "receive_to_batch": 1.1,
+            "decode_validate": 21.9,
+            "sql_in_tx": 43.5,
+            "commit": 18.6,
+            "e2e_from_enqueue": 227.2,
+            "e2e_from_schedule": 227.2
+          },
+          "durable_lag": 932,
+          "cpu": {
+            "projector0": 0.37,
+            "projector1": 0.39,
+            "projector2": 0.39,
+            "producer0": 0.65,
+            "producer1": 0.66
+          },
+          "load1": 3.66357421875
+        },
+        {
+          "s": 58,
+          "n_sampled": 1791,
+          "max_e2e_ms": 325.2,
+          "worst_breakdown_ms": {
+            "producer_lateness": 0.2,
+            "enqueue_to_ack": 21.8,
+            "enqueue_to_receive": 129.7,
+            "receive_to_batch": 0.9,
+            "decode_validate": 16.7,
+            "sql_in_tx": 34.4,
+            "commit": 143.3,
+            "e2e_from_enqueue": 325.0,
+            "e2e_from_schedule": 325.2
+          },
+          "durable_lag": 598,
+          "cpu": {
+            "projector0": 0.41,
+            "projector1": 0.44,
+            "projector2": 0.42,
+            "producer0": 0.67,
+            "producer1": 0.66
+          },
+          "load1": 3.66357421875
+        },
+        {
+          "s": 59,
+          "n_sampled": 1862,
+          "max_e2e_ms": 192.2,
+          "worst_breakdown_ms": {
+            "producer_lateness": 0.6,
+            "enqueue_to_ack": 23.1,
+            "enqueue_to_receive": 133.1,
+            "receive_to_batch": 0.7,
+            "decode_validate": 15.1,
+            "sql_in_tx": 34.1,
+            "commit": 8.7,
+            "e2e_from_enqueue": 191.6,
+            "e2e_from_schedule": 192.2
+          },
+          "durable_lag": 937,
+          "cpu": {
+            "projector0": 0.38,
+            "projector1": 0.4,
+            "projector2": 0.43,
+            "producer0": 0.67,
+            "producer1": 0.68
+          },
+          "load1": 3.66357421875
+        },
+        {
+          "s": 60,
+          "n_sampled": 1606,
+          "max_e2e_ms": 255.5,
+          "worst_breakdown_ms": {
+            "producer_lateness": 0.3,
+            "enqueue_to_ack": 21.4,
+            "enqueue_to_receive": 152.2,
+            "receive_to_batch": 1.3,
+            "decode_validate": 29.3,
+            "sql_in_tx": 64.6,
+            "commit": 7.8,
+            "e2e_from_enqueue": 255.2,
+            "e2e_from_schedule": 255.5
+          },
+          "durable_lag": 980,
+          "cpu": {
+            "projector0": 0.38,
+            "projector1": 0.38,
+            "projector2": 0.38,
+            "producer0": 0.67,
+            "producer1": 0.67
+          },
+          "load1": 3.5302734375
+        }
+      ],
+      "docker_samples": [
+        {
+          "t_ns": 24094286122413,
+          "fleetforge-api-1": "0.48% 126.6MiB / 512MiB",
+          "fleetforge-kafka-1": "47.84% 499MiB / 768MiB",
+          "fleetforge-schema-registry-1": "0.34% 215.1MiB / 448MiB",
+          "fleetforge-postgres-1": "46.80% 309.6MiB / 768MiB"
+        },
+        {
+          "t_ns": 24101559363903,
+          "fleetforge-api-1": "0.48% 126.6MiB / 512MiB",
+          "fleetforge-kafka-1": "39.48% 494.5MiB / 768MiB",
+          "fleetforge-schema-registry-1": "0.28% 215.2MiB / 448MiB",
+          "fleetforge-postgres-1": "35.80% 310.7MiB / 768MiB"
+        },
+        {
+          "t_ns": 24108803643607,
+          "fleetforge-api-1": "0.41% 126.5MiB / 512MiB",
+          "fleetforge-kafka-1": "39.35% 490.7MiB / 768MiB",
+          "fleetforge-schema-registry-1": "5.54% 215.4MiB / 448MiB",
+          "fleetforge-postgres-1": "23.62% 310.9MiB / 768MiB"
+        },
+        {
+          "t_ns": 24116014592607,
+          "fleetforge-api-1": "0.45% 126.5MiB / 512MiB",
+          "fleetforge-kafka-1": "39.32% 489.5MiB / 768MiB",
+          "fleetforge-schema-registry-1": "0.24% 215.3MiB / 448MiB",
+          "fleetforge-postgres-1": "24.32% 311MiB / 768MiB"
+        },
+        {
+          "t_ns": 24123233481026,
+          "fleetforge-api-1": "0.46% 126.5MiB / 512MiB",
+          "fleetforge-kafka-1": "47.41% 410.3MiB / 768MiB",
+          "fleetforge-schema-registry-1": "5.38% 215.3MiB / 448MiB",
+          "fleetforge-postgres-1": "28.21% 311.3MiB / 768MiB"
+        },
+        {
+          "t_ns": 24130498941799,
+          "fleetforge-api-1": "0.47% 126.5MiB / 512MiB",
+          "fleetforge-kafka-1": "45.54% 415MiB / 768MiB",
+          "fleetforge-schema-registry-1": "0.36% 215.3MiB / 448MiB",
+          "fleetforge-postgres-1": "39.27% 311.5MiB / 768MiB"
+        },
+        {
+          "t_ns": 24137745678566,
+          "fleetforge-api-1": "0.44% 126.4MiB / 512MiB",
+          "fleetforge-kafka-1": "47.41% 419.6MiB / 768MiB",
+          "fleetforge-schema-registry-1": "0.41% 215.3MiB / 448MiB",
+          "fleetforge-postgres-1": "30.75% 311.7MiB / 768MiB"
+        },
+        {
+          "t_ns": 24144997646618,
+          "fleetforge-api-1": "0.44% 126.4MiB / 512MiB",
+          "fleetforge-kafka-1": "49.36% 423.9MiB / 768MiB",
+          "fleetforge-schema-registry-1": "0.30% 215.3MiB / 448MiB",
+          "fleetforge-postgres-1": "30.80% 311.9MiB / 768MiB"
+        },
+        {
+          "t_ns": 24152216715614,
+          "fleetforge-api-1": "0.43% 126.4MiB / 512MiB",
+          "fleetforge-kafka-1": "43.81% 428.6MiB / 768MiB",
+          "fleetforge-schema-registry-1": "0.28% 215.3MiB / 448MiB",
+          "fleetforge-postgres-1": "44.55% 312MiB / 768MiB"
+        },
+        {
+          "t_ns": 24159473095019,
+          "fleetforge-api-1": "1.18% 126.4MiB / 512MiB",
+          "fleetforge-kafka-1": "10.92% 428.9MiB / 768MiB",
+          "fleetforge-schema-registry-1": "1.08% 215.3MiB / 448MiB",
+          "fleetforge-postgres-1": "1.11% 375.1MiB / 768MiB"
+        },
+        {
+          "t_ns": 24167145151095,
+          "fleetforge-api-1": "1.16% 126.4MiB / 512MiB",
+          "fleetforge-kafka-1": "8.67% 428.9MiB / 768MiB",
+          "fleetforge-schema-registry-1": "0.99% 215.2MiB / 448MiB",
+          "fleetforge-postgres-1": "0.39% 375.2MiB / 768MiB"
+        },
+        {
+          "t_ns": 24174555458776,
+          "fleetforge-api-1": "1.02% 126.4MiB / 512MiB",
+          "fleetforge-kafka-1": "9.77% 428.9MiB / 768MiB",
+          "fleetforge-schema-registry-1": "15.27% 215.3MiB / 448MiB",
+          "fleetforge-postgres-1": "0.33% 375.2MiB / 768MiB"
+        }
+      ],
+      "matches_oracle": true
+    }
+  ]
+}

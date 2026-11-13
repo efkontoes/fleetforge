@@ -71,8 +71,74 @@ backup: no point-in-time recovery. After restoring an older dump:
 
 * Inspect: `select slot_name, active, pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) from pg_replication_slots;`
 * Alerts: `ReplicationSlotRetainingWal` (> 512 MiB for 10 min), `ReplicationSlotInactive`.
-* Hard cap: `max_slot_wal_keep_size=2GB`. Beyond it the slot is invalidated:
-  delete and re-register the connector (it re-snapshots).
+* Hard cap: `max_slot_wal_keep_size=2GB`. Beyond it the slot is invalidated
+  (`wal_status = 'lost'`, metric `fleetforge_cdc_slot_lost`, alert
+  `ReplicationSlotLost`). `ReplicationSlotNearInvalidation` fires when
+  `safe_wal_size` drops below 512 MiB. **Measured:** sustained 5,000 telemetry
+  events/s writes ~1.7 MB/s of WAL (335 B/event: small batches when consumers keep
+  up), so a Debezium outage of roughly **20 minutes** at that rate invalidates the
+  slots. The 512 MiB warning leaves ~5 minutes. Production needs a larger cap
+  (sized from the WAL rate × the longest tolerated CDC outage) and a disk to match.
+* **Recovering a lost slot:** delete the connector, drop the slot
+  (`select pg_drop_replication_slot('fleetforge_outbox')`), then re-register with
+  `infrastructure/debezium/register-connectors.sh`. `snapshot.mode=initial`
+  re-reads every row still in `fleet.outbox_events`. Consumers are version-guarded,
+  so the re-sent events are harmless. Events whose outbox rows were already
+  deleted by retention are not recoverable from CDC. That is why retention refuses
+  to run while the slot is inactive or lagging.
+
+## CDC stalls
+
+* The connector state can say RUNNING while nothing is delivered. The
+  authoritative check is end to end: `fleetforge_cdc_missions_behind` and
+  `fleetforge_cdc_oldest_undelivered_seconds` (ops exporter) compare
+  `fleet.missions.version` with `downstream.mission_status.version`. Alert:
+  `CdcDeliveryStalled` (> 120 s for 2 min). `CdcEndToEndSlow` alone is not
+  enough, because it is computed from *delivered* events and is silent during a
+  total stall.
+* Measured (SIGKILL of Kafka Connect during mission traffic): the stall was
+  visible end to end 25 s after the kill (oldest undelivered change older than
+  15 s; the exporter is scraped every 15 s), and all 163 committed missions were
+  delivered 42 s after restart, most of it Connect's JVM start.
+
+## Consumer alive but not consuming
+
+Alerts `ProjectorNotInGroup` / `MissionConsumerNotInGroup` (computed by
+kafka-exporter, so they work even when the consumer's own metrics have stopped).
+Seen once in the final audit; root cause not determined.
+1. Capture evidence first: `docker compose kill -s USR1 projector`, then
+   `docker compose logs --tail 200 projector`. Every thread's Python stack is in
+   the log; the process keeps running.
+2. `docker compose restart projector`. It resumes from the PostgreSQL ledger;
+   nothing is lost or applied twice.
+3. Attach the stack dump to the incident.
+
+## Consumer refuses to start: `OffsetLedgerError`
+
+The projector or mission consumer stops when its PostgreSQL offset ledger cannot
+be reconciled with the Kafka log (ADR 0011). The log line says which case:
+
+| Message | Meaning | Typical decision |
+|---|---|---|
+| `... deleted and recreated` / `beyond the end of the log` | The topic was recreated, so its offsets restarted | Reprocess the new log from 0 |
+| `records [a, b) were deleted by retention before being applied` | The consumer was down or behind for longer than retention | Replay `[a, b)` from an archive if one exists, otherwise accept the loss at `b` |
+| `batch starts at b but the ledger expects a` | Same as above, detected while running | Same |
+
+Stop the consumer first: it only reads the ledger when partitions are assigned.
+Then, for each affected partition:
+```bash
+fleet-replay ledger-reset --group telemetry-projector --partition 3 --to 0 \
+    --reason "telemetry.raw.v1 recreated in incident 42" --dry-run   # check
+fleet-replay ledger-reset --group telemetry-projector --partition 3 --to 0 \
+    --reason "telemetry.raw.v1 recreated in incident 42"             # apply
+```
+The command validates `--to` against the current log, rebinds the row to the
+current topic id, and records a `LEDGER_RESET` row in `fleet.replay_runs`
+(operator, before/after, reason). Reprocessing is idempotent.
+
+Contract: producers to `telemetry.raw.v1` must **not** use Kafka transactions.
+Control records would create offset gaps, and the projector would refuse them as
+missing records.
 * Removing CDC permanently: delete the connectors **and** the slots:
   `select pg_drop_replication_slot('fleetforge_outbox');`. An orphaned slot
   retains WAL until the cap.

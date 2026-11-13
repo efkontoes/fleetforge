@@ -8,6 +8,15 @@ Status: accepted (Milestone 2)
   * RECOVERABLE → retry in place while holding offsets;
   * ORDERING → record or count.
   Some permanent errors are `retry_eligible` (unknown robot/boot/firmware).
+* **Registry errors are classified by exception class** (amended in the final
+  audit). Any transport failure (`httpx.TransportError`, `OSError`, timeouts) and
+  any registry answer other than 404 is RECOVERABLE. Before this, a hand-written
+  list of class names missed `httpx.ReadError`. A disruptive test caught valid
+  events being quarantined as `MALFORMED_PAYLOAD` when a restarting registry
+  reset connections ("Connection reset by peer"). A 404 for a schema id is
+  PERMANENT_DATA only while the registry demonstrably holds the topic's subject
+  (uncached `get_subjects`). That is a defence against a registry that is still
+  loading its store; it was suspected during the audit but not observed.
 * The quarantine is `fleet.telemetry_rejections` extended with source
   coordinates, raw bytes, category, retry eligibility, status
   (`QUARANTINED/RECORDED/REPLAYED/RESOLVED/DISCARDED`) and consumer version, plus
@@ -29,3 +38,6 @@ Status: accepted (Milestone 2)
   `fleetforge_projector_quarantined_total` still counts every delivery.
 Logs carry reason codes, event ids and offsets but never payloads; payloads live
 only in the access-controlled quarantine table.
+* A registry misconfiguration (topic subject never registered) now stalls the
+  projector, with lag and retry alerts, instead of quarantining every record. A
+  stall is visible and recoverable; mass quarantine needs a replay to undo.
