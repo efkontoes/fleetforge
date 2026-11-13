@@ -78,7 +78,9 @@ DURATION ?= 300
 up-bench:  ## benchmark profile: core only (stops CDC, observability, compose projector)
 	docker compose --profile full stop connect mission-consumer projector \
 	  prometheus grafana kafka-exporter ops-exporter
-	docker compose --profile core up -d --wait
+	# Wait on long-running services only: `--wait` counts a finished one-shot
+	# container (kafka-init, exit 0) as a failure.
+	docker compose --profile core up -d --wait postgres kafka schema-registry api
 
 bench-traced:  ## per-hop traced sustained run, e.g. make bench-traced RATE=5000 DURATION=300
 	$(PY) benchmarks/m2_traced.py --rate $(RATE) --seconds $(DURATION) --label make

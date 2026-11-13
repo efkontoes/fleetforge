@@ -9,11 +9,12 @@ import time
 import uuid
 
 import pytest
-from confluent_kafka import TopicPartition
+from confluent_kafka import KafkaError, KafkaException, TopicPartition
 from confluent_kafka.admin import AdminClient, NewTopic
 from sqlalchemy import text
 
 from fleetforge.domain.errors import OffsetLedgerError
+from fleetforge.kafka.retry import retry_transient
 from fleetforge.projector.main import Projector
 from fleetforge.projector.replay import Replayer
 from fleetforge.simulator.fleet import Telemetry
@@ -31,7 +32,15 @@ def ledger(db, group):
 
 def recreate(topic: str) -> None:
     admin = AdminClient({"bootstrap.servers": BOOTSTRAP})
-    admin.delete_topics([topic])[topic].result(30)
+
+    def delete():
+        try:
+            admin.delete_topics([topic])[topic].result(30)
+        except KafkaException as exc:  # a retried request whose first attempt succeeded
+            if exc.args[0].code() != KafkaError.UNKNOWN_TOPIC_OR_PART:
+                raise
+
+    retry_transient(delete)
     for _ in range(60):  # deletion completes asynchronously on the controller
         try:
             admin.create_topics([NewTopic(topic, 6, 1)])[topic].result(30)
@@ -73,7 +82,9 @@ def test_recreated_topic_is_refused_until_an_audited_reset(fresh_topic, stack_se
 
     out = reset_all(stack_settings, stack_db, group, fresh_topic, lambda p, hw: 0,
                     "test: topic recreated")  # fmt: skip
-    assert all(o["before"]["topic_id"] == old_id for o in out)
+    # Partitions the first fleet never wrote to have no ledger row ("before" is None).
+    existed = [o for o in out if o["before"] is not None]
+    assert existed and all(o["before"]["topic_id"] == old_id for o in existed)
     Projector(stack_settings, stack_db, topic=fresh_topic, group=group).run(max_idle_s=5)
     check(stack_db, items)
     with stack_db.connect() as c:
@@ -107,9 +118,8 @@ def test_records_deleted_before_being_applied_are_refused(fresh_topic, stack_set
     part = max(hw, key=lambda p: hw[p] - applied.get(p, (0, None))[0])
     cut = applied[part][0] + 3  # retention removes 3 records we never applied
     admin = AdminClient({"bootstrap.servers": BOOTSTRAP})
-    futures = admin.delete_records([TopicPartition(fresh_topic, part, cut)])
-    for f in futures.values():
-        f.result(30)
+    retry_transient(lambda: [f.result(30) for f in admin.delete_records(
+        [TopicPartition(fresh_topic, part, cut)]).values()])  # fmt: skip
 
     with pytest.raises(OffsetLedgerError, match="deleted by retention"):
         Projector(stack_settings, stack_db, topic=fresh_topic, group=group).run(max_idle_s=5)
