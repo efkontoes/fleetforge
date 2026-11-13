@@ -24,6 +24,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.2",
+    "pytest-timeout>=2.3",
     "testcontainers[postgres]>=4.7",
     "ruff==0.17.4",
 ]
@@ -45,6 +46,9 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
+# A hung test dumps every thread's stack after 5 min (CI run 43338045324 hung for
+# 40 min with no output). Stack steps in CI also pass --timeout to fail, not hang.
+faulthandler_timeout = 300
 markers = [
     "integration: needs a real PostgreSQL instance",
     "stack: needs the running Compose stack (FLEETFORGE_STACK=1)",

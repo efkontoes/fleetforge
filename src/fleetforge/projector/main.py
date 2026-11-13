@@ -86,6 +86,7 @@ class Projector:
         self.stop = threading.Event()
         self.stats = RunStats()
         self._revoked = False
+        self._assigned = False  # partitions received at least once
         self._last_lag = 0.0
         m.POOL_SIZE.set(settings.db_pool_size)
         # The incarnation of the topic this ledger is bound to (see kafka/offsets.py).
@@ -105,6 +106,7 @@ class Projector:
             kafka_offsets.resolve_start_offsets(consumer, partitions, ledger, self.topic_id,
                                                 group=self.group)  # fmt: skip
         consumer.assign(partitions)
+        self._assigned = True
         log.info("partitions assigned", extra={"partitions": [p.partition for p in partitions],
                                                "from_ledger": sorted(ledger)})  # fmt: skip
 
@@ -124,7 +126,7 @@ class Projector:
         gc.freeze()
         self.consumer.subscribe([self.topic], on_assign=self._on_assign,
                                 on_revoke=self._on_revoke)  # fmt: skip
-        idle_since = time.monotonic()
+        idle_since = started = time.monotonic()
         try:
             while not self.stop.is_set():
                 msgs = self.consumer.consume(
@@ -143,8 +145,17 @@ class Projector:
                                                 msg.value(), ts))  # fmt: skip
                 self._update_lag()
                 if not records:
-                    if max_idle_s is not None and time.monotonic() - idle_since > max_idle_s:
-                        break
+                    if max_idle_s is not None:
+                        # "Idle" means no records while owning partitions. Joining the
+                        # group does not count: after a broker restart the coordinator
+                        # can take several seconds (seen under memory pressure). Give
+                        # up if no assignment arrives within 60 s.
+                        if not self._assigned:
+                            if time.monotonic() - started > max(60.0, max_idle_s):
+                                break
+                            idle_since = time.monotonic()
+                        elif time.monotonic() - idle_since > max_idle_s:
+                            break
                     continue
                 idle_since = time.monotonic()
                 self._handle(records)

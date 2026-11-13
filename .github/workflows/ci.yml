@@ -115,9 +115,9 @@ jobs:
           done
           exit 1
       - name: Stack tests (non-disruptive)
-        run: pytest tests/stack -p no:logging -m "not disruptive"
+        run: pytest tests/stack -p no:logging --timeout 600 --timeout-method thread -v -m "not disruptive"
       - name: Stack tests (disruptive, one at a time)
-        run: pytest tests/stack -p no:logging -m disruptive
+        run: pytest tests/stack -p no:logging --timeout 600 --timeout-method thread -v -m disruptive
       - name: Service logs on failure
         if: failure()
         run: |
