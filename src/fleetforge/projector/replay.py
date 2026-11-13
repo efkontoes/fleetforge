@@ -4,6 +4,8 @@
     fleet-replay quarantine [--reason UNKNOWN_ROBOT] [--limit 1000] [--dry-run]
     fleet-replay offsets --partition 3 --from 1200 --to 1300 [--dry-run]
     fleet-replay correct --event-id <uuid> --set battery_pct=55.0 [--dry-run]
+    fleet-replay ledger-reset --group telemetry-projector --partition 3 --to 0 \
+                 --reason "topic recreated after incident 42" [--topic ...] [--dry-run]
 
 Guarantees:
   * Replays run through exactly the same BatchProcessor as live traffic, including
@@ -37,7 +39,9 @@ from sqlalchemy import Connection, Engine, text
 
 from fleetforge.config import Settings, get_settings
 from fleetforge.db.engine import make_engine
+from fleetforge.kafka import offsets as kafka_offsets
 from fleetforge.kafka.codec import TelemetryDecoder, TelemetryEncoder
+from fleetforge.kafka.retry import retry_transient
 from fleetforge.kafka.schemas import registry_client
 from fleetforge.projector.processor import (
     BatchProcessor,
@@ -124,6 +128,53 @@ class Replayer:
         return self._run([rec], "CORRECTION", selector, dry_run, rejection_ids=ids,
                          resolved_status="RESOLVED")  # fmt: skip
 
+    def ledger_reset(self, group: str, topic: str, partition: int, to: int, reason: str,
+                     dry_run: bool) -> dict[str, Any]:  # fmt: skip
+        """The only sanctioned way to move a ledger across a gap or onto a recreated
+        topic. Consumers of `group` refuse to start (OffsetLedgerError) until this is
+        done. Stop them first: a running consumer only reads the ledger on assignment."""
+        if not reason.strip():
+            raise SystemExit("--reason is required")
+        current_id = kafka_offsets.topic_id(self.s.kafka_bootstrap, topic)
+        probe = Consumer({"bootstrap.servers": self.s.kafka_bootstrap,
+                          "group.id": f"ledger-reset-{uuid.uuid4()}"})  # fmt: skip
+        try:
+            low, high = retry_transient(lambda: probe.get_watermark_offsets(
+                TopicPartition(topic, partition), timeout=10, cached=False))  # fmt: skip
+        finally:
+            probe.close()
+        if not low <= to <= high:
+            raise SystemExit(f"--to {to} is outside the current log [{low}, {high}]")
+        replay_id = uuid.uuid4()
+        with self.engine.connect() as c:
+            tx = c.begin()
+            before = c.execute(text(
+                "SELECT next_offset, kafka_topic_id FROM fleet.consumer_offsets WHERE"
+                " consumer_group = :g AND topic = :t AND partition = :p FOR UPDATE"),
+                {"g": group, "t": topic, "p": partition}).first()  # fmt: skip
+            c.execute(text(
+                "INSERT INTO fleet.consumer_offsets AS o (consumer_group, topic, partition,"
+                " next_offset, kafka_topic_id) VALUES (:g, :t, :p, :to, :id)"
+                " ON CONFLICT (consumer_group, topic, partition) DO UPDATE SET"
+                " next_offset = :to, kafka_topic_id = :id, updated_at = now()"),
+                {"g": group, "t": topic, "p": partition, "to": to, "id": current_id})  # fmt: skip
+            if dry_run:
+                tx.rollback()
+            else:
+                tx.commit()
+        selector = {"group": group, "topic": topic, "partition": partition, "to": to,
+                    "reason": reason, "log": [low, high], "topic_id": current_id,
+                    "before": None if before is None else
+                    {"next_offset": before[0], "topic_id": before[1]}}  # fmt: skip
+        with self.engine.begin() as c:
+            c.execute(text("INSERT INTO fleet.replay_runs (replay_id, mode, selector, dry_run,"
+                           " operator, outcomes) VALUES (:id, 'LEDGER_RESET',"
+                           " CAST(:s AS jsonb), :d, :o, '{}'::jsonb)"),
+                      {"id": replay_id, "s": json.dumps(selector), "d": dry_run,
+                       "o": self.operator})  # fmt: skip
+        return {"replay_id": str(replay_id), "mode": "LEDGER_RESET", "dry_run": dry_run,
+                **selector}  # fmt: skip
+
     # ------------------------------------------------------------------ core
 
     def _quarantine_rows(self, where: str, params: dict, limit: int = 10_000) -> list[dict]:
@@ -208,7 +259,13 @@ def main(argv: list[str] | None = None) -> int:
     c = sub.add_parser("correct")
     c.add_argument("--event-id", required=True)
     c.add_argument("--set", dest="changes", action="append", required=True)
-    for p in (e, q, o, c):
+    lr = sub.add_parser("ledger-reset")
+    lr.add_argument("--group", required=True)
+    lr.add_argument("--topic")
+    lr.add_argument("--partition", type=int, required=True)
+    lr.add_argument("--to", type=int, required=True)
+    lr.add_argument("--reason", required=True)
+    for p in (e, q, o, c, lr):
         p.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
     settings = get_settings()
@@ -219,6 +276,9 @@ def main(argv: list[str] | None = None) -> int:
         out = r.quarantined(a.reason, a.limit, a.dry_run)
     elif a.cmd == "offsets":
         out = r.offsets(a.partition, a.first, a.last, a.dry_run)
+    elif a.cmd == "ledger-reset":
+        out = r.ledger_reset(a.group, a.topic or settings.telemetry_topic, a.partition, a.to,
+                             a.reason, a.dry_run)  # fmt: skip
     else:
         out = r.correct(a.event_id, _parse_changes(a.changes), a.dry_run)
     print(json.dumps(out, indent=2))

@@ -28,7 +28,7 @@ from sqlalchemy import Connection, Engine
 
 from fleetforge.db import batch as sqlb
 from fleetforge.db import repository as repo
-from fleetforge.domain.errors import PERMANENT_DB_ERRORS
+from fleetforge.domain.errors import PERMANENT_DB_ERRORS, OffsetLedgerError
 from fleetforge.domain.ingest import Candidate, Observation, observation_from_record, plan_batch
 from fleetforge.domain.telemetry import (
     Decision,
@@ -194,6 +194,7 @@ class BatchProcessor:
         self.clock = clock
         self.fault = fault_hook or (lambda stage: None)
         self.cache = RegistryCache()
+        self.topic_ids: dict[str, str] = {}  # topic -> Kafka topic UUID, set by the consumer
 
     # ------------------------------------------------------------------ public
 
@@ -288,7 +289,7 @@ class BatchProcessor:
 
             sqlb.insert_rejections(conn, rejections, now, CONSUMER_VERSION)
             if self.group:
-                sqlb.advance_ledger(conn, self.group, _next_offsets(todo))
+                sqlb.advance_ledger(conn, self.group, _next_offsets(todo), self.topic_ids)
             self.fault("before_commit")
             result.results.extend(outcome[i] for i in range(len(todo)))
             if self.before_commit:
@@ -353,8 +354,22 @@ class BatchProcessor:
     def _skip_already_applied(self, conn, prepared, result) -> list[_Prepared]:
         if not self.group:
             return prepared
-        ledger = sqlb.lock_ledger(conn, self.group, {(p.record.topic, p.record.partition)
-                                                      for p in prepared})  # fmt: skip
+        parts = {(p.record.topic, p.record.partition) for p in prepared}
+        ledger = sqlb.lock_ledger(conn, self.group, parts, self.topic_ids)
+        first: dict[tuple[str, int], int] = {}
+        for p in prepared:
+            k = (p.record.topic, p.record.partition)
+            first[k] = min(first.get(k, p.record.offset), p.record.offset)
+        for k, lowest in first.items():
+            # telemetry.raw.v1 is written without Kafka transactions, so its offsets are
+            # contiguous. A batch starting beyond the ledger means records in between
+            # were never delivered to us: librdkafka reset an out-of-range position
+            # (retention overtook a lagging consumer). Stop rather than skip them.
+            if 0 < ledger[k] < lowest:
+                raise OffsetLedgerError(
+                    f"{self.group}/{k[0]}/{k[1]}: batch starts at {lowest} but the ledger"
+                    f" expects {ledger[k]}; records [{ledger[k]}, {lowest}) were never seen"
+                )
         todo = []
         for p in prepared:
             done = ledger.get((p.record.topic, p.record.partition), -1)
@@ -398,7 +413,7 @@ class BatchProcessor:
                 with self.engine.begin() as conn:
                     sqlb.insert_rejections(conn, [self._reject_row(p, rej)], now, CONSUMER_VERSION)
                     if self.group:
-                        sqlb.advance_ledger(conn, self.group, _next_offsets([p]))
+                        sqlb.advance_ledger(conn, self.group, _next_offsets([p]), self.topic_ids)
                 single = BatchResult(
                     [RecordResult(p.record, Outcome.REJECTED, rej.reason_code, p.event_id)],
                     transactions=1,

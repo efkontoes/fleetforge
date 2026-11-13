@@ -16,7 +16,12 @@ from uuid import UUID
 
 from sqlalchemy import Connection
 
-from fleetforge.domain.errors import category_of, initial_status, retry_eligible
+from fleetforge.domain.errors import (
+    OffsetLedgerError,
+    category_of,
+    initial_status,
+    retry_eligible,
+)
 from fleetforge.domain.ingest import Observation
 from fleetforge.domain.telemetry import OrderingKey, ReasonCode, StoredPosition
 
@@ -28,30 +33,48 @@ def _cur(conn: Connection):
 # ------------------------------------------------------------------ offset ledger
 
 
-def lock_ledger(conn: Connection, group: str, parts: Iterable[tuple[str, int]]) -> dict:
+@dataclass(frozen=True)
+class LedgerPosition:
+    next_offset: int
+    kafka_topic_id: str | None  # Kafka's topic UUID when the row was written
+
+
+def lock_ledger(
+    conn: Connection,
+    group: str,
+    parts: Iterable[tuple[str, int]],
+    topic_ids: dict[str, str] | None = None,
+) -> dict[tuple[str, int], int]:
     """Current next_offset per (topic, partition), row-locked until commit.
 
     The lock fences a 'zombie' consumer that still believes it owns a partition
     after a rebalance: it blocks here, then sees the advanced offset and skips the
     records already applied by the new owner.
+
+    `topic_ids` maps topic name -> the Kafka topic UUID the caller is reading. A row
+    written for a different UUID belongs to a deleted incarnation of the topic; its
+    offsets mean nothing for the new one, so we refuse instead of skipping records.
     """
     parts = sorted(set(parts))
+    topic_ids = topic_ids or {}
     topics, partitions = [t for t, _ in parts], [p for _, p in parts]
+    ids = [topic_ids.get(t) for t in topics]
     with _cur(conn) as cur:
         # FOR UPDATE only locks rows that exist. Seed missing rows first: a concurrent
         # seeder of the same key blocks on the unique index until we commit, so even
         # the very first batch of a partition is fenced.
         cur.execute(
             """
-            INSERT INTO fleet.consumer_offsets (consumer_group, topic, partition, next_offset)
-            SELECT %s, t, p, 0 FROM unnest(%s::text[], %s::int[]) AS u(t, p)
+            INSERT INTO fleet.consumer_offsets
+                (consumer_group, topic, partition, next_offset, kafka_topic_id)
+            SELECT %s, t, p, 0, i FROM unnest(%s::text[], %s::int[], %s::text[]) AS u(t, p, i)
             ON CONFLICT DO NOTHING
             """,
-            (group, topics, partitions),
+            (group, topics, partitions, ids),
         )
         cur.execute(
             """
-            SELECT topic, partition, next_offset FROM fleet.consumer_offsets
+            SELECT topic, partition, next_offset, kafka_topic_id FROM fleet.consumer_offsets
             WHERE consumer_group = %s
               AND (topic, partition) IN (SELECT * FROM unnest(%s::text[], %s::int[]))
             ORDER BY topic, partition
@@ -59,33 +82,59 @@ def lock_ledger(conn: Connection, group: str, parts: Iterable[tuple[str, int]]) 
             """,
             (group, topics, partitions),
         )
-        return {(t, p): o for t, p, o in cur.fetchall()}
+        out = {}
+        for t, p, o, tid in cur.fetchall():
+            expected = topic_ids.get(t)
+            if expected and tid and tid != expected:
+                raise OffsetLedgerError(
+                    f"ledger row {group}/{t}/{p} belongs to topic id {tid}, but the topic now"
+                    f" has id {expected}: it was deleted and recreated. Refusing to apply"
+                    " old offsets to a new log; see `fleet-replay ledger-reset`."
+                )
+            out[(t, p)] = o
+        return out
 
 
-def advance_ledger(conn: Connection, group: str, next_offsets: dict[tuple[str, int], int]) -> None:
+def advance_ledger(
+    conn: Connection,
+    group: str,
+    next_offsets: dict[tuple[str, int], int],
+    topic_ids: dict[str, str] | None = None,
+) -> None:
     if not next_offsets:
         return
     items = sorted(next_offsets.items())
+    topic_ids = topic_ids or {}
     with _cur(conn) as cur:
         cur.execute(
             """
-            INSERT INTO fleet.consumer_offsets AS c (consumer_group, topic, partition, next_offset)
-            SELECT %s, t, p, o FROM unnest(%s::text[], %s::int[], %s::int8[]) AS u(t, p, o)
+            INSERT INTO fleet.consumer_offsets AS c
+                (consumer_group, topic, partition, next_offset, kafka_topic_id)
+            SELECT %s, t, p, o, i
+            FROM unnest(%s::text[], %s::int[], %s::int8[], %s::text[]) AS u(t, p, o, i)
             ON CONFLICT (consumer_group, topic, partition) DO UPDATE
-            SET next_offset = GREATEST(c.next_offset, EXCLUDED.next_offset), updated_at = now()
+            SET next_offset = GREATEST(c.next_offset, EXCLUDED.next_offset),
+                kafka_topic_id = COALESCE(c.kafka_topic_id, EXCLUDED.kafka_topic_id),
+                updated_at = now()
             """,
-            (group, [k[0] for k, _ in items], [k[1] for k, _ in items], [o for _, o in items]),
+            (
+                group,
+                [k[0] for k, _ in items],
+                [k[1] for k, _ in items],
+                [o for _, o in items],
+                [topic_ids.get(k[0]) for k, _ in items],
+            ),
         )
 
 
-def read_ledger(conn: Connection, group: str, topic: str) -> dict[int, int]:
+def read_ledger(conn: Connection, group: str, topic: str) -> dict[int, LedgerPosition]:
     with _cur(conn) as cur:
         cur.execute(
-            "SELECT partition, next_offset FROM fleet.consumer_offsets"
+            "SELECT partition, next_offset, kafka_topic_id FROM fleet.consumer_offsets"
             " WHERE consumer_group = %s AND topic = %s",
             (group, topic),
         )
-        return dict(cur.fetchall())
+        return {p: LedgerPosition(o, tid) for p, o, tid in cur.fetchall()}
 
 
 # ------------------------------------------------------------------ registry lookups

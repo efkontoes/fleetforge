@@ -11,6 +11,11 @@ RECOVERABLE      the infrastructure is temporarily wrong (DB down, timeout, brok
                     Lag grows; that is the backpressure signal.
 ORDERING         the record is valid but not newer than what we hold (stale), or is
                  a redelivery (duplicate). -> recorded / counted, never retried.
+POSITION         the durable offset ledger and the Kafka log disagree (topic
+                 recreated, records deleted by retention before being processed).
+                 -> stop the consumer (OffsetLedgerError). Guessing a position here
+                    would silently skip or lose events; an operator decides, with
+                    `fleet-replay ledger-reset`, which is audited.
 """
 
 from enum import StrEnum
@@ -67,6 +72,10 @@ PERMANENT_DB_ERRORS = (
     psycopg.errors.IntegrityError,
     psycopg.errors.DataError,
 )
+
+
+class OffsetLedgerError(RuntimeError):
+    """The durable ledger cannot be reconciled with the Kafka log. Never retried."""
 
 
 def is_recoverable(exc: BaseException) -> bool:

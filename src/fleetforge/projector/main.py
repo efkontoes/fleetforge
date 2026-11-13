@@ -25,6 +25,7 @@ from fleetforge.config import Settings, get_settings
 from fleetforge.db import batch as sqlb
 from fleetforge.db.engine import make_engine
 from fleetforge.domain.errors import ErrorCategory, category_of, is_recoverable
+from fleetforge.kafka import offsets as kafka_offsets
 from fleetforge.kafka.codec import TelemetryDecoder
 from fleetforge.kafka.schemas import registry_client
 from fleetforge.observability import configure_logging
@@ -53,6 +54,7 @@ class Projector:
         fault_hook: Callable[[str], None] | None = None,
         consumer_conf: dict | None = None,
         seek_to_ledger: bool = True,
+        topic_id: str | None = None,
     ):
         self.s = settings
         self.seek_to_ledger = seek_to_ledger  # False only in tests: trust Kafka's offsets
@@ -85,18 +87,22 @@ class Projector:
         self._revoked = False
         self._last_lag = 0.0
         m.POOL_SIZE.set(settings.db_pool_size)
+        # The incarnation of the topic this ledger is bound to (see kafka/offsets.py).
+        self.topic_id = topic_id or kafka_offsets.topic_id(settings.kafka_bootstrap, self.topic)
+        self.processor.topic_ids = {self.topic: self.topic_id}
 
     # ------------------------------------------------------------------ rebalance
 
     def _on_assign(self, consumer: Consumer, partitions: list[TopicPartition]) -> None:
-        """The DB ledger, not Kafka's committed offset, decides where to resume."""
+        """The DB ledger, not Kafka's committed offset, decides where to resume.
+        Raises OffsetLedgerError (out of consume(), stopping the process) when the
+        ledger cannot be reconciled with the log."""
         ledger = {}
         if self.seek_to_ledger:
             with self.engine.connect() as conn:
                 ledger = sqlb.read_ledger(conn, self.group, self.topic)
-        for tp in partitions:
-            if tp.partition in ledger:
-                tp.offset = ledger[tp.partition]
+            kafka_offsets.resolve_start_offsets(consumer, partitions, ledger, self.topic_id,
+                                                group=self.group)  # fmt: skip
         consumer.assign(partitions)
         log.info("partitions assigned", extra={"partitions": [p.partition for p in partitions],
                                                "from_ledger": sorted(ledger)})  # fmt: skip

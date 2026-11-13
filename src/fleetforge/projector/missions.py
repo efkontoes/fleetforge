@@ -28,6 +28,7 @@ from sqlalchemy import Engine
 from fleetforge.config import Settings, get_settings
 from fleetforge.db import batch as sqlb
 from fleetforge.db.engine import make_engine
+from fleetforge.kafka import offsets as kafka_offsets
 from fleetforge.observability import configure_logging
 
 log = logging.getLogger("fleetforge.missions")
@@ -57,11 +58,13 @@ def parse(value: bytes | None) -> dict[str, Any] | None:
 
 
 def apply_events(engine: Engine, msgs: list[tuple[str, int, int, bytes | None]],
-                 group: str = GROUP) -> dict[str, int]:  # fmt: skip
+                 group: str = GROUP,
+                 topic_ids: dict[str, str] | None = None) -> dict[str, int]:  # fmt: skip
     """msgs: (topic, partition, offset, value). One transaction for the batch."""
     outcome = {"applied": 0, "ignored": 0, "malformed": 0, "skipped": 0}
     with engine.begin() as conn:
-        ledger = sqlb.lock_ledger(conn, group, {(t, p) for t, p, _, _ in msgs})
+        ledger = sqlb.lock_ledger(conn, group, {(t, p) for t, p, _, _ in msgs}, topic_ids)
+        cur = conn.connection.driver_connection.cursor()
         events = []
         for t, p, o, v in msgs:
             if o < ledger.get((t, p), -1):
@@ -69,11 +72,18 @@ def apply_events(engine: Engine, msgs: list[tuple[str, int, int, bytes | None]],
                 continue
             ev = parse(v)
             if ev is None:
+                # Kept with its coordinates and bytes, in the same transaction that
+                # moves the ledger past it: it can never be both skipped and lost.
                 outcome["malformed"] += 1
                 log.warning("malformed mission event", extra={"partition": p, "offset": o})
+                cur.execute(
+                    "INSERT INTO downstream.mission_event_quarantine"
+                    " (source_topic, source_partition, source_offset, payload_bytes, error)"
+                    " VALUES (%s, %s, %s, %s, %s) ON CONFLICT DO NOTHING",
+                    (t, p, o, v, "unparseable or incomplete mission event"),
+                )
                 continue
             events.append(ev)
-        cur = conn.connection.driver_connection.cursor()
         for ev in events:  # few events per batch; keep per-row SQL simple and obvious
             cur.execute(
                 """
@@ -97,7 +107,7 @@ def apply_events(engine: Engine, msgs: list[tuple[str, int, int, bytes | None]],
         offsets: dict[tuple[str, int], int] = {}
         for t, p, o, _ in msgs:
             offsets[(t, p)] = max(offsets.get((t, p), 0), o + 1)
-        sqlb.advance_ledger(conn, group, offsets)
+        sqlb.advance_ledger(conn, group, offsets, topic_ids)
     for k, n in outcome.items():
         EVENTS.labels(k).inc(n)
     return outcome
@@ -109,12 +119,12 @@ def run(settings: Settings, engine: Engine, stop: threading.Event, *, group: str
     consumer = Consumer({"bootstrap.servers": settings.kafka_bootstrap, "group.id": group,
                          "enable.auto.commit": False, "auto.offset.reset": "earliest"})  # fmt: skip
 
+    tid = kafka_offsets.topic_id(settings.kafka_bootstrap, topic)
+
     def on_assign(c, parts):
         with engine.connect() as conn:
             ledger = sqlb.read_ledger(conn, group, topic)
-        for tp in parts:
-            if tp.partition in ledger:
-                tp.offset = ledger[tp.partition]
+        kafka_offsets.resolve_start_offsets(c, parts, ledger, tid, group=group)
         c.assign(parts)
 
     consumer.subscribe([topic], on_assign=on_assign)
@@ -135,7 +145,7 @@ def run(settings: Settings, engine: Engine, stop: threading.Event, *, group: str
                     break
                 continue
             idle = time.monotonic()
-            for k, n in apply_events(engine, msgs, group).items():
+            for k, n in apply_events(engine, msgs, group, {topic: tid}).items():
                 totals[k] += n
             consumer.commit(offsets=[TopicPartition(t, p, o + 1) for t, p, o, _ in msgs],
                             asynchronous=True)  # fmt: skip
