@@ -69,11 +69,24 @@ class TelemetryDecoder:
     walks the whole schema for inline field tags on EVERY message; we use neither,
     and that walk was ~25 % of the projector's CPU (benchmarks/projector_gc.py
     profile, final audit). Parsed writer schemas are cached per id: ids are
-    immutable. Unknown ids are not cached (404 -> DecodeError, permanent)."""
+    immutable. Failures are never cached. An unknown id (404) is a permanent
+    DecodeError only while the registry demonstrably holds this topic's subject;
+    otherwise it is RegistryUnavailable (retry, never quarantine)."""
 
     def __init__(self, client: SchemaRegistryClient, topic: str):
         self._client = client
+        self._subject = f"{topic}-value"
         self._writers: dict[int, Any] = {}
+
+    def _registry_is_authoritative(self) -> bool:
+        """True only if the registry demonstrably holds this topic's subject (uncached
+        call). Found by the final audit: Apicurio with KafkaSQL storage serves HTTP
+        before it has re-read its store from Kafka, and answers 404 for ids that do
+        exist. Treating that 404 as 'unknown schema' quarantined valid events."""
+        try:
+            return self._subject in self._client.get_subjects(subject_prefix=self._subject)
+        except Exception:
+            return False
 
     def _writer(self, schema_id: int) -> Any:
         parsed = self._writers.get(schema_id)
@@ -81,7 +94,7 @@ class TelemetryDecoder:
             try:
                 registered = self._client.get_schema(schema_id)
             except Exception as exc:
-                if _registry_down(exc):
+                if _registry_down(exc) or not self._registry_is_authoritative():
                     raise RegistryUnavailable(str(exc)) from exc
                 raise DecodeError(f"schema id {schema_id}: {type(exc).__name__}: {exc}") from exc
             if registered.schema_type not in (None, "AVRO"):

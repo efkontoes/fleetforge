@@ -151,11 +151,16 @@ class TestRegistryOutageClassification:
         )
 
         class FailingClient:
-            def __init__(self, exc):
-                self.exc = exc
+            def __init__(self, exc, subjects=("t-value",)):
+                self.exc, self.subjects = exc, subjects
 
             def get_schema(self, schema_id):
                 raise self.exc
+
+            def get_subjects(self, subject_prefix=None):
+                if isinstance(self.subjects, Exception):
+                    raise self.subjects
+                return list(self.subjects)
 
         framed = b"\x00\x00\x00\x00\x01payload"
         dec = TelemetryDecoder(FailingClient(SchemaRegistryError(500, 50001, "db down")), "t")
@@ -164,7 +169,16 @@ class TestRegistryOutageClassification:
         assert is_recoverable(RegistryUnavailable("x"))
         dec = TelemetryDecoder(FailingClient(SchemaRegistryError(404, 40403, "not found")), "t")
         with pytest.raises(DecodeError):
-            dec.decode(framed)
+            dec.decode(framed)  # registry holds our subject: the id really is unknown
+        # A registry that is up but still loading its store (Apicurio KafkaSQL) answers
+        # 404 for existing ids and cannot confirm our subject: never permanent.
+        not_loaded = FailingClient(SchemaRegistryError(404, 40403, "not found"), subjects=())
+        with pytest.raises(RegistryUnavailable):
+            TelemetryDecoder(not_loaded, "t").decode(framed)
+        flaky = FailingClient(SchemaRegistryError(404, 40403, "not found"),
+                              subjects=SchemaRegistryError(503, 50301, "starting"))  # fmt: skip
+        with pytest.raises(RegistryUnavailable):
+            TelemetryDecoder(flaky, "t").decode(framed)
         with pytest.raises(DecodeError):
             dec.decode(b"{not avro}")
         assert dec._writers == {}  # failures are never cached

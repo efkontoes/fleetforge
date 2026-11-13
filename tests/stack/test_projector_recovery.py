@@ -195,3 +195,44 @@ def _db_ok(db) -> bool:
         return True
     except Exception:
         return False
+
+
+@pytest.mark.disruptive
+def test_registry_outage_pauses_projection_and_never_quarantines(fresh_topic, stack_settings,
+                                                                 stack_db, record_property):  # fmt: skip
+    """E5: a temporary schema-registry outage is an infrastructure failure, not bad
+    data. A projector with a cold schema cache must retry (no commit, no quarantine),
+    then project everything once the registry is back. Quarantine rows must equal the
+    oracle's exactly: only the genuinely malformed records."""
+    items = fleet(fresh_topic, int(time.time()) % 10**6 + 40, robots=6, ticks=60)
+    group = f"regdown-{uuid.uuid4().hex[:8]}"
+    settings = stack_settings.model_copy(update={"projector_max_retry_backoff_s": 2.0})
+    compose("stop", "schema-registry")
+    down_at = time.monotonic()
+    p = Projector(settings, stack_db, topic=fresh_topic, group=group)
+    t = threading.Thread(target=p.run, kwargs={"max_idle_s": 20}, daemon=True)
+    t.start()
+    try:
+        wait_until(lambda: p.stats.retries >= 3, 90, 0.2, "retries while the registry is down")
+        assert p.stats.records == 0
+        with stack_db.connect() as c:
+            rows = c.execute(text("SELECT count(*) FROM fleet.telemetry_rejections"
+                                  " WHERE source_topic = :t"), {"t": fresh_topic}).scalar_one()  # fmt: skip
+        assert rows == 0  # nothing quarantined during the outage
+    finally:
+        compose("start", "schema-registry")
+    up_at = time.monotonic()
+    drained = wait_until(lambda: ledger_caught_up(stack_db, group, fresh_topic), 240, 1,
+                         "backlog projected after the registry returns")  # fmt: skip
+    p.stop.set()
+    t.join(30)
+    check(stack_db, items)
+    exp = expected(items, transport="kafka")
+    with stack_db.connect() as c:
+        got = {(r[0], r[1]) for r in c.execute(text(
+            "SELECT dedup_key, reason_code FROM fleet.telemetry_rejections"
+            " WHERE source_topic = :t"), {"t": fresh_topic})}  # fmt: skip
+    assert got == exp.rejection_rows
+    record_property("registry_outage_s", round(up_at - down_at, 1))
+    record_property("retries", p.stats.retries)
+    record_property("projected_after_registry_back_s", round(drained, 1))
