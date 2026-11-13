@@ -224,13 +224,17 @@ def test_sigkilled_producer_loses_only_unacknowledged_events(fresh_topic, stack_
 
     from .conftest import high_watermarks
 
-    items = generate(SimConfig(seed=int(time.time()) % 10**6 + 7, robots=10, ticks=150,
+    # ~3,000 events at 400/s (~7.5 s) with a 2 s linger: whatever the runner speed,
+    # events are still queued, unsent, when the first acknowledgements arrive.
+    # (CI: with 1,600 events and a 0.5 s linger a fast runner had produced and
+    # acknowledged everything before the kill, so there was nothing left to lose.)
+    items = generate(SimConfig(seed=int(time.time()) % 10**6 + 7, robots=10, ticks=300,
                                faults=FAULTS))  # fmt: skip
     acks = tmp_path / "acks.txt"
     child = mp.get_context("fork").Process(target=_paced_producer, args=(
-        items, fresh_topic, acks, {"linger.ms": 500}))  # fmt: skip
+        items, fresh_topic, acks, {"linger.ms": 2000}))  # fmt: skip
     child.start()
-    wait_until(lambda: acks.exists() and len(acks.read_text().split()) > 300, 60, 0.05)
+    wait_until(lambda: acks.exists() and len(acks.read_text().split()) >= 1, 60, 0.02)
     os.kill(child.pid, signal.SIGKILL)
     child.join(10)
     acked = {int(x) for x in acks.read_text().split()}

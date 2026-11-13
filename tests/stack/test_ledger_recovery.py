@@ -115,7 +115,11 @@ def test_records_deleted_before_being_applied_are_refused(fresh_topic, stack_set
     applied = ledger(stack_db, group)
     fleet(fresh_topic, seed + 5, robots=6, ticks=60)
     hw = high_watermarks(fresh_topic)
-    part = max(hw, key=lambda p: hw[p] - applied.get(p, (0, None))[0])
+    # Only a partition with ledger history can show a gap (one without history may
+    # legitimately start wherever the log begins); pick the one with most new records.
+    candidates = [p for p in applied if hw[p] - applied[p][0] >= 3]
+    assert candidates, "second fleet wrote too little to an already-applied partition"
+    part = max(candidates, key=lambda p: hw[p] - applied[p][0])
     cut = applied[part][0] + 3  # retention removes 3 records we never applied
     admin = AdminClient({"bootstrap.servers": BOOTSTRAP})
     retry_transient(lambda: [f.result(30) for f in admin.delete_records(
