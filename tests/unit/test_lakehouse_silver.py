@@ -88,6 +88,22 @@ def test_firmware_units_are_converted_exactly():
     assert (a0["battery_pct"], a0["x_m"], a0["source_position_unit"]) == (80.0, 1.0, "M")
 
 
+def test_millimetres_convert_with_correct_rounding():
+    """9 mm must be exactly 0.009 m. Multiplying by 0.001 would give
+    0.009000000000000001, and a fingerprint or equality test would then disagree
+    with a robot that reports 0.009 m directly."""
+    assert 9 * 0.001 != 0.009  # the trap this rule avoids
+    rows = fx.bronze_rows(SCENARIO, (1,))
+    ref = build_reference([r for r in rows if r["source_topic"] == FIRMWARE_TOPIC],
+                          [r for r in rows if r["source_topic"] == ROBOT_EVENTS_TOPIC])  # fmt: skip
+    value = fx.framed(fx.telemetry(fx.ROBOT_B, fx.BOOT_B1, 1, 50, battery=0.5, x=9.0, y=-13.0,
+                                   firmware="3.0.0-fixture"), fx.SCHEMA_V1)  # fmt: skip
+    row = {**next(r for r in rows if r["source_topic"] == TELEMETRY_TOPIC), "record_value": value,
+           "value_schema_id": fx.SCHEMA_V1}  # fmt: skip
+    event = prepare(row, WRITERS, ref).event
+    assert (event.x_m, event.y_m) == (0.009, -0.013)
+
+
 def test_out_of_range_is_judged_after_conversion():
     tel, silver = _silver()
     b3 = next(o for o in silver.outcomes if o["event_id"] == fx.uid(f"{fx.BOOT_B1}:3"))
