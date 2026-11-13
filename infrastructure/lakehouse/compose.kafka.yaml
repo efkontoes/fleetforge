@@ -1,0 +1,18 @@
+# Overlay for the Bronze-from-Kafka phase only: joins the spark service to the
+# Milestone 2 network (read-only use of its Kafka and schema registry; nothing in
+# that stack is created, changed or restarted except the dedicated test topic
+# that tests/lakehouse/test_kafka_bronze.py creates and deletes).
+#
+#   docker compose -f infrastructure/lakehouse/compose.yaml \
+#                  -f infrastructure/lakehouse/compose.kafka.yaml --profile jobs run --rm spark ...
+services:
+  spark:
+    networks: [default, milestone2]
+    environment:
+      FLEETFORGE_KAFKA_BOOTSTRAP: kafka:9092
+      FLEETFORGE_SCHEMA_REGISTRY_URL: http://schema-registry:8080/apis/ccompat/v7
+
+networks:
+  milestone2:
+    external: true
+    name: fleetforge_default
