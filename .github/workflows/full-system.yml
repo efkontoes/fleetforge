@@ -3,13 +3,14 @@ name: full-system
 # Full-system level: the whole platform from a clean checkout on a fresh runner.
 #   gate-a: Kafka -> Bronze -> incremental Silver -> releases -> dbt Gold -> Trino
 #   gate-b: the same pipeline under Airflow with six injected faults
+#   gate-c: release export, training, registration, drift
 # Manual only: one run takes about an hour of runner time.
 on:
   workflow_dispatch:
     inputs:
       gates:
         description: "Gates to run"
-        default: "a b"
+        default: "a b c"
 
 permissions:
   contents: read
@@ -26,6 +27,7 @@ jobs:
         run: |
           docker compose build
           make -f lakehouse.mk lake-build
+          docker build -q -f infrastructure/ml/Dockerfile -t fleetforge-ml:dev .
           docker compose --env-file .env.lakehouse -f infrastructure/lakehouse/compose.yaml \
             -f infrastructure/airflow/compose.yaml --profile airflow build
       - name: Milestone 2 Kafka and registry
@@ -36,6 +38,10 @@ jobs:
       - name: Gate A
         if: contains(inputs.gates, 'a')
         run: make -f lakehouse.mk lake-gate-a
+      - name: Gate C
+        if: contains(inputs.gates, 'a') && contains(inputs.gates, 'c')
+        run: make -f lakehouse.mk lake-gate-c
+
       - name: Gate B (Airflow, Spark jobs, Trino, Kafka on one runner)
         if: contains(inputs.gates, 'b')
         env:
@@ -62,3 +68,5 @@ jobs:
           path: |
             build/lakehouse-evidence/*.json
             build/lakehouse-evidence/*.xml
+            build/lakehouse-evidence/exports/*/manifest.json
+            build/lakehouse-evidence/exports/*/DATA_CARD.md

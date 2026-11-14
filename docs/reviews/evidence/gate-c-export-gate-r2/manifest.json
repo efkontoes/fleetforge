@@ -1,0 +1,171 @@
+{
+  "release_id": "gate-r2",
+  "content_sha256": "a118829a6f547a909f30818dbe273309c94b4cbfef53bf0343d0fb3531baa88c",
+  "files": [
+    {
+      "path": "test.parquet",
+      "sha256": "09b81feff1dba77a981b3d0c2c6cb1a8c90be0d946d13d54d3ba78bf344a698c",
+      "bytes": 232444,
+      "rows": 4125
+    },
+    {
+      "path": "train.parquet",
+      "sha256": "1818b0bb482260f239e6711252077154dcc16cee6d45cf4def480d11d27528c7",
+      "bytes": 1072828,
+      "rows": 20698
+    },
+    {
+      "path": "validation.parquet",
+      "sha256": "ce5bbead8f1ba071fa72706d7a61a900bd46d8db519d0877e4f12d715ca31122",
+      "bytes": 183816,
+      "rows": 3115
+    }
+  ],
+  "rows": {
+    "train": 20698,
+    "validation": 3115,
+    "test": 4125
+  },
+  "silver_build_id": "76fd20fc7b7e509b9056286b",
+  "silver_events_snapshot_id": 7139470045663208338,
+  "feature_schema_version": "robot-state/1",
+  "split_seed": "g2",
+  "readiness": "CANDIDATE",
+  "schema": [
+    {
+      "name": "release_id",
+      "type": "STRING",
+      "nullable": false
+    },
+    {
+      "name": "observation_id",
+      "type": "STRING",
+      "nullable": false
+    },
+    {
+      "name": "robot_id",
+      "type": "STRING",
+      "nullable": false
+    },
+    {
+      "name": "robot_model",
+      "type": "STRING",
+      "nullable": false
+    },
+    {
+      "name": "firmware_version",
+      "type": "STRING",
+      "nullable": false
+    },
+    {
+      "name": "episode_id",
+      "type": "STRING",
+      "nullable": false
+    },
+    {
+      "name": "boot_number",
+      "type": "BIGINT",
+      "nullable": false
+    },
+    {
+      "name": "sequence_number",
+      "type": "BIGINT",
+      "nullable": false
+    },
+    {
+      "name": "step_index",
+      "type": "BIGINT",
+      "nullable": false
+    },
+    {
+      "name": "observed_at",
+      "type": "TIMESTAMP",
+      "nullable": false
+    },
+    {
+      "name": "battery_pct",
+      "type": "DOUBLE",
+      "nullable": false
+    },
+    {
+      "name": "x_m",
+      "type": "DOUBLE",
+      "nullable": false
+    },
+    {
+      "name": "y_m",
+      "type": "DOUBLE",
+      "nullable": false
+    },
+    {
+      "name": "heading_rad",
+      "type": "DOUBLE",
+      "nullable": true
+    },
+    {
+      "name": "motor_temp_c",
+      "type": "DOUBLE",
+      "nullable": true
+    },
+    {
+      "name": "lidar_ok",
+      "type": "BOOLEAN",
+      "nullable": true
+    },
+    {
+      "name": "dt_prev_s",
+      "type": "DOUBLE",
+      "nullable": true
+    },
+    {
+      "name": "vx_mps",
+      "type": "DOUBLE",
+      "nullable": true
+    },
+    {
+      "name": "vy_mps",
+      "type": "DOUBLE",
+      "nullable": true
+    },
+    {
+      "name": "split",
+      "type": "STRING",
+      "nullable": false
+    },
+    {
+      "name": "split_robot",
+      "type": "STRING",
+      "nullable": false
+    },
+    {
+      "name": "quality_flags",
+      "type": "ARRAY<STRING>",
+      "nullable": false
+    },
+    {
+      "name": "source_topic",
+      "type": "STRING",
+      "nullable": false
+    },
+    {
+      "name": "kafka_topic_id",
+      "type": "STRING",
+      "nullable": false
+    },
+    {
+      "name": "kafka_partition",
+      "type": "INT",
+      "nullable": false
+    },
+    {
+      "name": "kafka_offset",
+      "type": "BIGINT",
+      "nullable": false
+    },
+    {
+      "name": "silver_build_id",
+      "type": "STRING",
+      "nullable": false
+    }
+  ]
+}
