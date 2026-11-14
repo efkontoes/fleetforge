@@ -122,6 +122,11 @@ rebuild and an independent Python reference after a SIGKILL at a commit boundary
 replay adds nothing; releases reproduce after expiry; Kafka, Bronze, Silver and Gold
 reconcile. Evidence: [execution ledger](docs/reviews/platform-execution.md).
 
+Freshness, measured with records arriving all the time and the pipeline every 10
+minutes: all 19,140 records reached Silver within 15 minutes (p95 739 s), so the SLO of
+95% within 15 minutes holds. The wait for the next run dominates; each Bronze and Silver
+run took 103–124 s on one core.
+
 ## Whole platform
 
 `fleetforge` (installed with the package) wraps the stacks; it prints every command it
@@ -138,10 +143,11 @@ fleetforge down
 ```
 
 Gate B (Airflow under six injected faults) needs about 5.5 GiB, so it runs on a CI runner:
-add the label `full-system` to a pull request, or dispatch the `full-system` workflow.
+add the label `gate-b` (Gate B only) or `full-system` (all three gates) to a pull request,
+or dispatch the `full-system` workflow. It has not passed yet (see the execution ledger).
 
 ## Documentation
-* [Execution ledger](docs/reviews/platform-execution.md) (defects D1–D14, optimisations) ·
+* [Execution ledger](docs/reviews/platform-execution.md) (defects D1–D15, optimisations) ·
   [fault matrix](docs/reviews/fault-matrix.md) ·
   [lakehouse runbook](docs/operations/lakehouse-runbook.md) ·
   [security](docs/operations/security.md) ·

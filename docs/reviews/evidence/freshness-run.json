@@ -1,0 +1,61 @@
+{
+ "cadence_s": 600,
+ "runs": [
+  {
+   "cycle": 0,
+   "published": 2869,
+   "bronze_rows": 3431,
+   "silver_mode": "FULL",
+   "pipeline_s": 107
+  },
+  {
+   "cycle": 1,
+   "published": 608,
+   "bronze_rows": 608,
+   "silver_mode": "INCREMENTAL",
+   "pipeline_s": 104
+  },
+  {
+   "cycle": 2,
+   "published": 10661,
+   "bronze_rows": 10661,
+   "silver_mode": "INCREMENTAL",
+   "pipeline_s": 112
+  },
+  {
+   "cycle": 3,
+   "published": 1561,
+   "bronze_rows": 1561,
+   "silver_mode": "INCREMENTAL",
+   "pipeline_s": 124
+  },
+  {
+   "cycle": 4,
+   "published": 1593,
+   "bronze_rows": 1593,
+   "silver_mode": "INCREMENTAL",
+   "pipeline_s": 103
+  },
+  {
+   "cycle": 5,
+   "published": 1886,
+   "bronze_rows": 1886,
+   "silver_mode": "INCREMENTAL",
+   "pipeline_s": 103
+  }
+ ],
+ "freshness": {
+  "records": 19140,
+  "p50_s": 461.581604,
+  "p95_s": 738.774604,
+  "p99_s": 757.662751,
+  "max_s": 769.617604,
+  "within_target": 1.0,
+  "topic": "fresh.c89b035e.telemetry",
+  "window_hours": 6.0,
+  "target_minutes": 15,
+  "measured_at": "2026-11-14 23:22:22.954724+00:00",
+  "slo": "95% of records within the target",
+  "slo_met": true
+ }
+}

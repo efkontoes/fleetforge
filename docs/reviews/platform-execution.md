@@ -11,6 +11,7 @@ a time.
 |---|---|---|---|---|
 | Registry-outage hotfix (PR #3) | CI green, merge commit | `1735569` on main | PR #3 checks green | merged |
 | M3 sync with main | merge, not rebase (branch is shared) | `bc0ee30` | pre-sync tag `m3-pre-sync-d3fb961` pushed | done |
+| Merges of #2, #4, #5, #6 | green CI, regular merge commits, in order | — | #2 green | **blocked:** GitHub refuses merges, pushes and new workflow runs until the account's email is verified |
 | Schema archiver on ADR 0016 | only an explicit 404 is recorded, and only as "not found yet"; other errors stop Bronze | M3 branch | unit tests; Spark Bronze tests | done |
 
 ## Milestone 3: lakehouse
@@ -19,10 +20,10 @@ a time.
 |---|---|---|
 | Incremental Silver (ADR 0017) | U(S, ΔB, ΔR, V) ≡ F; checkpoint; corrections, conflicts, late registrations, firmware changes, schema ids resolving later; crash and conflict recovery | Python: 30 randomized multi-batch differential runs plus replay, crash and narrow-scope tests, mutation-checked. Spark: incremental equals a Spark full rebuild and the Python reference on a random corpus; crash after the prepared merge; stale writer detected and retried; rule-version change forces a full rebuild |
 | UNRESOLVED outcome | a schema id the registry 404s is UNRESOLVED, retry-eligible, never MALFORMED | Python and Spark tests |
-| Gold tables | daily telemetry, pipeline quality and rates, state observations, releases (spec §9) | in progress |
-| Maintenance, backfill, retention | expiry and orphans with release tags kept; storage report | pending |
-| Reconciliation | Kafka → Bronze → Silver → Gold counts recorded in `ops.reconciliation_runs` | pending |
-| Gate A | real engines, tens of thousands of observations, replay, idempotence, old release reproduced, Spark killed at a commit boundary | pending |
+| Gold tables | daily telemetry, pipeline quality and rates, state observations, releases (spec §9) | dbt output equals the Python reference on Trino; final days stay frozen and reopen on request; releases reproduce after newer builds and after snapshot expiry (Gate A) |
+| Maintenance, backfill, retention | expiry and orphans with release tags kept; storage report | Spark maintenance tests; Gate A expired snapshots, kept every release tag and wrote the storage report; the maintenance DAG ran end to end under Airflow |
+| Reconciliation | Kafka → Bronze → Silver → Gold counts recorded in `ops.reconciliation_runs` | 10/10 checks pass in Gate A, locally and on a fresh CI runner; 12/12 after the DR restore (two checks added since) |
+| Gate A | real engines, tens of thousands of observations, replay, idempotence, old release reproduced, Spark killed at a commit boundary | passed at 46,696 records, locally and on a fresh CI runner with identical results (`evidence/gate-a.json`, `evidence/ci-fresh-runner/`) |
 
 ## Milestone 4: orchestration and quality
 
@@ -31,8 +32,8 @@ a time.
 | Airflow DAGs | pipeline, release, maintenance and backfill DAGs; idempotent, retried with backoff, bounded by timeouts; exit 65 fails without retry; one-slot writer pool | 4 DAGs pass the policy checks inside the Airflow 3.3.2 image; maintenance DAG ran end to end through the scheduler, the socket proxy and Spark job containers (it found D10 and D11) |
 | dbt | analytical Gold on Trino, no second Silver; tests for keys, not-null, ranges, enums, referential integrity, cross-table and release consistency, freshness, custom invariants | 28 data tests pass in Gate A and the lakehouse CI |
 | Lineage | OpenLineage RunEvents with Iceberg snapshot ids as dataset versions | written by every job to `lakehouse_ops.lineage_events` |
-| Monitoring | exporter, alert rules with runbook links, freshness SLO measured | promtool rule tests pass; exporter reads real job runs; freshness job ships with the pipeline DAG |
-| Gate B | orchestrated recovery from six isolated faults | runs on a CI runner (needs about 5.5 GiB) |
+| Monitoring | exporter, alert rules with runbook links, freshness SLO measured | promtool rule tests pass; exporter reads real job runs; freshness SLO met over six 10-minute cycles: 19,140 records, p95 739 s, max 770 s, 100% within 15 minutes (`evidence/freshness-run.json`) |
+| Gate B | orchestrated recovery from six isolated faults | **not passed yet.** It needs about 5.5 GiB, so it runs on a CI runner. The first run stopped before any fault: the driver could not parse the Airflow CLI's JSON. The fix (`bf50391`) cannot be pushed until the GitHub account's email is verified |
 
 ## Milestone 5: ML dataset and baseline
 
@@ -65,7 +66,7 @@ a time.
 | 10,000 events/s × 60 s | 605,829 events, 9,995.9/s, peak 12,957/s, lag max 4,130, drained; oracle matched |
 | Fault game day | Milestone 2: 19 + 7 stack tests pass; lakehouse: L1-L14 pass (fault matrix) |
 | Scale | 1.06 M records: Bronze 128 s, full Silver 238-492 s, small delta 124 s (one core) |
-| Clean-environment CI | full-system workflow (Gates A, B, C) on a fresh runner |
+| Clean-environment CI | full-system run 43646391081: Gates A and C passed with results identical to this machine; Gate B as above |
 
 ## Defects found during execution
 
@@ -85,6 +86,13 @@ a time.
 | D12 | final validation, API restart while publishing | Milestone 2's API died after a container restart: Docker remounts its metrics tmpfs as root 755 and the workers (uid 10001) cannot write | tmpfs mounted with the app's uid and mode 0700; `test_api_serves_again_after_a_container_restart` fails without the fix and passes with it |
 | D13 | CI, Milestone 2 stack job | confluent-kafka 2.16's serializer first asks the registry for Confluent-only "associations", and with no client timeout one unanswered request hung the job for 600 s | subject name strategy named explicitly (topic, as the contract says), and a 10 s registry client timeout, which callers already treat as "registry unavailable" |
 | D14 | CI, lakehouse Kafka phase | Spark 4.1 mis-plans an anti-join with an Iceberg table created earlier in the same session ("computeStats called before pushdown") | the schema archive, a few rows, is read into Python; snapshot ids come from Iceberg's API with `refresh()` instead of `refreshTable` |
+| D15 | CI, ML job, once it could load its tests | the training test's random walks started too far from the walls, so with seed 1 the training split had no positive label; locally the test had only ever been skipped, because the dev venv has no scikit-learn | half the episodes drift into a wall (10-13% positives in every split across 50 seeds); in the ML image the old test fails and the new one passes |
+
+## Open observations
+
+| # | Seen in | What happened | State |
+|---|---|---|---|
+| O1 | CI on #6, run 43646675844, Milestone 2 stack job | `test_producer_survives_broker_interruption`: after an 8 s broker stop, the idempotent producer delivered nothing more within its 300 s message timeout | the code it tests is unchanged since Milestone 2 and the test passed on #2, #4, #5 and in final validation; the job keeps only error lines from the broker, so the cause is not established; a rerun could not start (account block) |
 
 ## Measured optimisations (Milestone 6)
 

@@ -22,12 +22,12 @@ from a run that actually happened.
 | L12 | Loss of the whole lakehouse (catalog and objects) | `scripts/lakehouse_dr.sh restore-check` | restore equals the backup; releases reproduce | passed: 15/15 tables, 24 s |
 | L13 | Fresh catalog never touched by Trino | Airflow maintenance DAG, first run | jobs work on a V0 JDBC catalog | failed first (D10), passed after the fix |
 | L14 | Lake with no Silver build yet | Airflow maintenance DAG | reconcile reports nothing to check | failed first (D11), passed after the fix |
-| L15 | Airflow scheduler killed during Silver | Gate B | run completes after restart; reconciliation passes | see Gate B |
-| L16 | Spark job container killed during Silver | Gate B | task retried; reconciliation passes | see Gate B |
-| L17 | Object store down at Bronze | Gate B | Bronze retried until Garage is back | see Gate B |
-| L18 | Registry restarted during Bronze | Gate B | Bronze retried; no record misclassified | see Gate B |
-| L19 | Completed run repeated | Gate B | every step idempotent | see Gate B |
-| L20 | Backfill overlapping the pipeline | Gate B | writer pool serialises them; both succeed | see Gate B |
+| L15 | Airflow scheduler killed during Silver | Gate B | run completes after restart; reconciliation passes | not run yet: Gate B stopped before its first fault (ledger) |
+| L16 | Spark job container killed during Silver | Gate B | task retried; reconciliation passes | not run yet: Gate B stopped before its first fault (ledger) |
+| L17 | Object store down at Bronze | Gate B | Bronze retried until Garage is back | not run yet: Gate B stopped before its first fault (ledger) |
+| L18 | Registry restarted during Bronze | Gate B | Bronze retried; no record misclassified | not run yet: Gate B stopped before its first fault (ledger) |
+| L19 | Completed run repeated | Gate B | every step idempotent | not run yet: Gate B stopped before its first fault (ledger) |
+| L20 | Backfill overlapping the pipeline | Gate B | writer pool serialises them; both succeed | not run yet: Gate B stopped before its first fault (ledger) |
 
 ## Operational path (Milestone 2), rerun on the final code (2026-11-14)
 

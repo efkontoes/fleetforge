@@ -22,10 +22,16 @@ described as Terraform but never applied.
 * 5,000 events/s for 5 minutes at 388 ms p99, and 10,000 events/s absorbed.
 * A million lakehouse records built on one core; a small delta over them in 124 s,
   after a measured 1.8× optimisation.
+* With records arriving all the time and a 10-minute pipeline, every record reached
+  Silver within 15 minutes (p95 739 s).
+
+**Not yet proven.** Recovery under Airflow from six injected faults (Gate B) needs a
+bigger machine than the laptop and has not passed in CI yet. The AWS deployment has
+never been applied.
 
 **How it was built.**
 * Every claim is backed by a test or an evidence file.
-* Every defect found on the way (14 of them) is written down with its cause and fix,
+* Every defect found on the way (15 of them) is written down with its cause and fix,
   including two in the earlier, already-audited milestone.
 * Decisions are recorded as ADRs (0001–0021).
 
