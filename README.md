@@ -111,4 +111,5 @@ docs/                  architecture, ADRs 0001-0011, learning notes, runbook, re
   [0008](docs/adr/0008-outbox-cdc-with-debezium.md) Debezium CDC ·
   [0009](docs/adr/0009-error-taxonomy-quarantine-replay.md) quarantine & replay ·
   [0010](docs/adr/0010-local-security-and-environment.md) security & environment ·
-  [0011](docs/adr/0011-offset-ledger-bound-to-log-incarnation.md) ledger bound to the log
+  [0011](docs/adr/0011-offset-ledger-bound-to-log-incarnation.md) ledger bound to the log ·
+  [0016](docs/adr/0016-registry-uncertainty-is-never-malformed.md) registry uncertainty is never malformed

@@ -142,6 +142,25 @@ missing records.
   `select pg_drop_replication_slot('fleetforge_outbox');`. An orphaned slot
   retains WAL until the cap.
 
+## Parked records (`TelemetryRecordsParked`)
+
+A record is parked when the schema registry kept answering 404 for its schema id for
+longer than `FLEETFORGE_PROJECTOR_SCHEMA_UNRESOLVED_HOLD_S` (120 s). That is not
+proof of bad data: a restarting registry answers 404 for ids it holds (ADR 0016).
+The row keeps the exact bytes and Kafka coordinates; the ledger has moved past it.
+
+1. List them: `SELECT source_partition, source_offset, errors->0->>'schema_id' AS id,
+   received_at FROM fleet.telemetry_rejections WHERE status = 'PARKED';`
+2. Check the id in the registry: `curl -s localhost:8081/apis/ccompat/v7/schemas/ids/<id>`.
+3. If the registry now returns it (outage, restore, late registration):
+   `fleet-replay quarantine --reason UNRESOLVED_SCHEMA_ID --dry-run`, then without
+   `--dry-run`. Rows become `REPLAYED`, or `RESOLVED` when the record turns out to
+   have a real data error (recorded in its own row).
+4. If the id genuinely never existed (a rogue producer), record that decision:
+   `UPDATE fleet.telemetry_rejections SET status = 'DISCARDED', updated_at = now(),
+   resolution = '{"by": "<you>", "why": "..."}' WHERE status = 'PARKED' AND ...;`
+   Never relabel them `MALFORMED_PAYLOAD`.
+
 ## Retention
 
 * Outbox: `python -m fleetforge.ops.retention --days 7` deletes in chunks, also
