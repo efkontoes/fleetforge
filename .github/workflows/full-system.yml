@@ -5,7 +5,7 @@ name: full-system
 #   gate-b: the same pipeline under Airflow with six injected faults
 #   gate-c: release export, training, registration, drift
 # Manual only, because one run takes about an hour of runner time: dispatch it, or add
-# the label "full-system" to a pull request.
+# the label "full-system" (all gates) or "gate-b" (Gate B only) to a pull request.
 on:
   workflow_dispatch:
     inputs:
@@ -16,14 +16,14 @@ on:
     types: [labeled]
 
 env:
-  GATES: ${{ inputs.gates || 'a b c' }}
+  GATES: ${{ inputs.gates || (github.event.label.name == 'gate-b' && 'b') || 'a b c' }}
 
 permissions:
   contents: read
 
 jobs:
   gates:
-    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'full-system'
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'full-system' || github.event.label.name == 'gate-b'
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     steps:
