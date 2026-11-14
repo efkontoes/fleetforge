@@ -1,0 +1,62 @@
+{
+  "bronze.kafka_records": {
+    "rows": 46744,
+    "snapshot": 4094534990801148049
+  },
+  "bronze.registry_schemas": {
+    "rows": 3,
+    "snapshot": 9187533680928170333
+  },
+  "silver.telemetry_events": {
+    "rows": 27942,
+    "snapshot": 7139470045663208338
+  },
+  "silver.telemetry_record_outcomes": {
+    "rows": 46696,
+    "snapshot": 177808940801732181
+  },
+  "silver.firmware_contracts": {
+    "rows": 4,
+    "snapshot": 2968552273241526606
+  },
+  "silver.robot_registry": {
+    "rows": 40,
+    "snapshot": 7207241570991692731
+  },
+  "silver.telemetry_prepared": {
+    "rows": 46696,
+    "snapshot": 110598379431976212
+  },
+  "silver.build_log": {
+    "rows": 5,
+    "snapshot": 4141908781107896622
+  },
+  "gold.robot_daily_telemetry": {
+    "rows": 28,
+    "snapshot": 526019028876822206
+  },
+  "gold.pipeline_daily_quality": {
+    "rows": 7,
+    "snapshot": 5269041531630104817
+  },
+  "gold.pipeline_daily_rates": {
+    "rows": 1,
+    "snapshot": 3448850795467877005
+  },
+  "gold.robot_state_observations": {
+    "rows": 55841,
+    "snapshot": 7441682858468264175
+  },
+  "gold.training_dataset_releases": {
+    "rows": 2,
+    "snapshot": 2116334689750940765
+  },
+  "ops.reconciliation_runs": {
+    "rows": 10,
+    "snapshot": 549261815746906267
+  },
+  "ops.table_storage": {
+    "rows": 10,
+    "snapshot": 3880946123475786901
+  }
+}
