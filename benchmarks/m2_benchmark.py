@@ -49,7 +49,7 @@ from fleetforge.simulator.sender import send
 ROOT = Path(__file__).resolve().parents[1]
 RESULTS = ROOT / "benchmarks" / "results"
 API = "http://localhost:8000"
-BOOTSTRAP = "localhost:29092"
+BOOTSTRAP = "127.0.0.1:29092"
 REGISTRY = "http://localhost:8081/apis/ccompat/v7"
 # Realistic, not adversarial: a few duplicates/reorders/invalid values.
 FAULTS = FaultConfig(duplicate_rate=0.01, reorder_rate=0.01, invalid_battery_rate=0.005,

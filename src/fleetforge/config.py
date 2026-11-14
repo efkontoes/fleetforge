@@ -20,7 +20,9 @@ class Settings(BaseSettings):
     http_telemetry_enabled: bool = True
 
     # ---- Kafka / schema registry (Milestone 2)
-    kafka_bootstrap: str = "localhost:29092"
+    # 127.0.0.1, not localhost: the port is published on IPv4 only, and where localhost
+    # resolves to ::1 first every new connection was refused once before falling back.
+    kafka_bootstrap: str = "127.0.0.1:29092"
     schema_registry_url: str = "http://localhost:8081/apis/ccompat/v7"
     telemetry_topic: str = "telemetry.raw.v1"
     mission_events_topic: str = "fleet.mission-events.v1"

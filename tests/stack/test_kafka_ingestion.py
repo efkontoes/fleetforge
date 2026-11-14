@@ -240,7 +240,9 @@ def test_sigkilled_producer_loses_only_unacknowledged_events(fresh_topic, stack_
     items = generate(SimConfig(seed=int(time.time()) % 10**6 + 7, robots=10, ticks=300,
                                faults=FAULTS))  # fmt: skip
     acks = tmp_path / "acks.txt"
-    child = mp.get_context("fork").Process(target=_paced_producer, args=(
+    # spawn, not fork: forking this multi-threaded process (librdkafka threads) left the
+    # child deadlocked on an inherited lock in CI run 43531660032, with no acks for 60 s.
+    child = mp.get_context("spawn").Process(target=_paced_producer, args=(
         items, fresh_topic, acks, {"linger.ms": 2000}))  # fmt: skip
     child.start()
     wait_until(lambda: acks.exists() and len(acks.read_text().split()) >= 1, 60, 0.02)
