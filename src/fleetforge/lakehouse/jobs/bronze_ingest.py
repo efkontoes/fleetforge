@@ -26,7 +26,6 @@ import argparse
 import hashlib
 import json
 import logging
-import sys
 import uuid
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -34,6 +33,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from fleetforge.config import get_settings
+from fleetforge.lakehouse import ops
 from fleetforge.lakehouse.bronze import (
     BRONZE_COLUMNS,
     SPARK_FRAMING_SQL,
@@ -50,6 +50,7 @@ from fleetforge.lakehouse.bronze import (
     spark_offsets_json,
     verify_batch,
 )
+from fleetforge.lakehouse.jobs import exits
 from fleetforge.lakehouse.jobs.common import (
     current_snapshot_id,
     ensure_tables,
@@ -332,10 +333,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             verify_parent(spark, planned_on)
             rows.unpersist()
         report["schemas_archived"] = archive_schemas(spark, run_id, m2.schema_registry_url)
+        report["snapshot_id"] = current_snapshot_id(spark, BRONZE_KAFKA_RECORDS)
+        report["lineage"] = {
+            "inputs": [ops.dataset(f"kafka://{m2.kafka_bootstrap}", t) for t in topics],
+            "outputs": [ops.table(BRONZE_KAFKA_RECORDS.qualified, report["snapshot_id"])],
+        }
         return report
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> dict[str, Any]:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     ap = argparse.ArgumentParser(prog="fleet-lake-bronze")
     ap.add_argument("--topic", action="append", help="default: every configured source topic")
@@ -349,10 +355,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="re-read from the earliest offset, skipping rows Bronze has")  # fmt: skip
     ap.add_argument("--accept-new-incarnation", action="append", metavar="TOPIC",
                     help="treat a recreated topic as new (audited in the snapshot)")  # fmt: skip
-    report = run(ap.parse_args(argv))
-    print(json.dumps(report, default=str))
-    return 0
+    return run(ap.parse_args(argv))
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    exits.run(main)

@@ -5,13 +5,12 @@ python -m fleetforge.lakehouse.jobs.maintenance [--delete-orphans] [--compact]
 
 from __future__ import annotations
 
-import json
 import logging
-import sys
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
+from fleetforge.lakehouse.jobs import exits
 from fleetforge.lakehouse.jobs.common import ensure_tables, fq, session, single_writer_lease
 from fleetforge.lakehouse.settings import LakehouseSettings
 from fleetforge.lakehouse.tables import ALL_TABLES, CATALOG, OPS_TABLE_STORAGE, Table
@@ -87,7 +86,7 @@ def maintain(
     return rows
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> list[dict[str, Any]]:
     import argparse
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -102,9 +101,8 @@ def main(argv: list[str] | None = None) -> int:
         rows = maintain(session("fleetforge-maintenance", lake), keep_days=args.keep_days,
                         retain_last=args.retain_last, delete_orphans=args.delete_orphans,
                         compact=args.compact)  # fmt: skip
-    print(json.dumps(rows, default=str))
-    return 0
+    return rows
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    exits.run(main)

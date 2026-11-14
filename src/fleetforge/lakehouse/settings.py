@@ -31,6 +31,7 @@ class LakehouseSettings(BaseSettings):
         "-XX:ParallelGCThreads=2 -XX:ConcGCThreads=1 -XX:CICompilerCount=2"
     )
     shuffle_partitions: int = 4
+    record_runs: bool = True  # write each job run to lakehouse_ops (monitoring, lineage)
     # Source topics; a validation run can point the jobs at its own topics.
     telemetry_topic: str = "telemetry.raw.v1"
     robot_events_topic: str = "fleet.robot-events.v1"

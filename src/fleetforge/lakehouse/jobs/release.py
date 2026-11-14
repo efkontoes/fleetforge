@@ -9,11 +9,11 @@ from __future__ import annotations
 import json
 import logging
 import re
-import sys
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from fleetforge.lakehouse import gold
+from fleetforge.lakehouse import gold, ops
+from fleetforge.lakehouse.jobs import exits
 from fleetforge.lakehouse.jobs.common import (
     current_snapshot_id,
     ensure_tables,
@@ -198,7 +198,7 @@ def reproduce_release(spark: SparkSession, release_id: str) -> dict[str, Any]:
             "recomputed": recomputed, "match": recorded == stored == recomputed}  # fmt: skip
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> tuple[int, dict[str, Any]]:
     import argparse
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -214,12 +214,18 @@ def main(argv: list[str] | None = None) -> int:
         if not args.seed:
             ap.error("create needs --seed")
         with single_writer_lease(lake.catalog_dsn, LEASE):
-            report = create_release(spark, args.release_id, args.seed, args.silver_build)
+            report = create_release(spark, args.release_id, args.seed, args.silver_build or None)
     else:
         report = reproduce_release(spark, args.release_id)
-    print(json.dumps(report, default=str))
-    return 0 if report.get("match", True) else 1
+    if report.get("status") == "created":
+        report["lineage"] = {
+            "inputs": [ops.table(SILVER_TELEMETRY_EVENTS.qualified,
+                                 report["silver_events_snapshot_id"])],
+            "outputs": [ops.table(GOLD_ROBOT_STATE_OBSERVATIONS.qualified,
+                                  report["observations_snapshot_id"])],
+        }  # fmt: skip
+    return (0 if report.get("match", True) else exits.PERMANENT), report
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    exits.run(main)

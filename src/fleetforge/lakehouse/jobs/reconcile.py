@@ -7,12 +7,12 @@ from __future__ import annotations
 
 import json
 import logging
-import sys
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from fleetforge.lakehouse.jobs import exits
 from fleetforge.lakehouse.jobs.common import current_snapshot_id, ensure_tables, fq, session
 from fleetforge.lakehouse.settings import LakehouseSettings
 from fleetforge.lakehouse.silver import TELEMETRY_TOPIC
@@ -165,7 +165,7 @@ def _releases(spark: SparkSession, checks: Checks) -> None:
         checks.add(f"release_rows:{r['release_id']}", r["rows_total"], stored)
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> tuple[int, list[dict[str, Any]]]:
     import argparse
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -175,9 +175,8 @@ def main(argv: list[str] | None = None) -> int:
     lake = LakehouseSettings()
     rows = reconcile(session("fleetforge-reconcile", lake), args.kafka_bootstrap,
                      lake.telemetry_topic)  # fmt: skip
-    print(json.dumps(rows, default=str))
-    return 0 if all(r["passed"] for r in rows) else 1
+    return (0 if all(r["passed"] for r in rows) else exits.PERMANENT), rows
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    exits.run(main)
