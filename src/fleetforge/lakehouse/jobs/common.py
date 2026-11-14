@@ -89,12 +89,12 @@ def fq(table: Table) -> str:
 
 
 def current_snapshot_id(spark: SparkSession, table: Table) -> int | None:
-    spark.catalog.refreshTable(fq(table))  # the catalog caches tables for 30 s per session
-    rows = spark.sql(
-        f"SELECT snapshot_id FROM {fq(table)}.history WHERE is_current_ancestor "
-        "ORDER BY made_current_at DESC LIMIT 1"
-    ).collect()
-    return rows[0][0] if rows else None
+    # refresh() on Iceberg's table object: the catalog caches tables for 30 s per session.
+    jvm = spark.sparkContext._jvm
+    t = jvm.org.apache.iceberg.spark.Spark3Util.loadIcebergTable(spark._jsparkSession, fq(table))
+    t.refresh()
+    snap = t.currentSnapshot()
+    return None if snap is None else int(snap.snapshotId())
 
 
 def snapshots(spark: SparkSession, table: Table) -> list[tuple[int, int | None, dict[str, str]]]:

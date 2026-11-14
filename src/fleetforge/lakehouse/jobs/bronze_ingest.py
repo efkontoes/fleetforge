@@ -233,13 +233,12 @@ def archive_schemas(
     )  # fmt: skip
     # Only FOUND is final. A NOT_FOUND id is asked again on every run: a restarting
     # registry can answer 404 for an id it holds (observed in Milestone 2's CI).
-    archived = spark.table(fq(BRONZE_REGISTRY_SCHEMAS))
-    found = archived.where(F.col("status") == "FOUND").select(
-        F.col("schema_id").alias("value_schema_id")
-    )
-    known_absent = {r[0] for r in archived.where(F.col("status") == "NOT_FOUND")
-                    .select("schema_id").distinct().collect()}  # fmt: skip
-    missing = wanted.join(found, "value_schema_id", "left_anti").collect()
+    # The archive is a few rows: read it into Python (a join with a table created in the same
+    # session trips Spark 4.1's "computeStats called before pushdown" planner bug).
+    archived = spark.table(fq(BRONZE_REGISTRY_SCHEMAS)).select("schema_id", "status").collect()
+    found = {r[0] for r in archived if r[1] == "FOUND"}
+    known_absent = {r[0] for r in archived if r[1] == "NOT_FOUND"}
+    missing = [r for r in wanted.collect() if int(r[0]) not in found]
     if not missing:
         return 0
     client = registry_client(registry_url)

@@ -162,7 +162,8 @@ services:
       # Each uvicorn process writes its metrics here; /metrics aggregates them, so
       # totals are global instead of "whichever process answered the scrape".
       PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus
-    tmpfs: [/tmp/prometheus]
+    # Owned by the app user: a bare tmpfs is root 755, which kills the workers after a restart.
+    tmpfs: ["/tmp/prometheus:uid=10001,gid=10001,mode=0700"]
     ports: ["127.0.0.1:${API_PORT:-8000}:8000"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz')"]
