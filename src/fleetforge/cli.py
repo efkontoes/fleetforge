@@ -24,7 +24,7 @@ UP = {
     "m2": [["docker", "compose", "--profile", "core", "--profile", "ops", "up", "-d", "--wait"]],
     "lake": [["make", "-f", "lakehouse.mk", "lake-up"]],
     "query": [["make", "-f", "lakehouse.mk", "lake-query"]],
-    "airflow": [[*AIRFLOW, "--profile", "airflow", "up", "-d", "--wait"]],
+    "airflow": [[*AIRFLOW, "--profile", "airflow", "up", "-d"]],  # --wait fails on the init job
 }
 TESTS = {
     "unit": [[".venv/bin/pytest", "tests/unit", "tests/ml", "-q"]],

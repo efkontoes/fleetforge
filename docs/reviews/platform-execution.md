@@ -46,7 +46,26 @@ a time.
 | Gate C | Kafka to a registered experiment, reproducible | passed (Gate A data, `make -f lakehouse.mk lake-gate-c`) |
 
 ## Milestone 6: infrastructure and operations
-Pending.
+
+| Workstream | Acceptance | Status |
+|---|---|---|
+| Terraform | validate, static security checks, plan with a safe test config; nothing provisioned | fmt, validate and an offline plan of 51 resources pass with placeholder credentials; trivy finds nothing at any severity (two inline exceptions with reasons); never applied |
+| Security | production versus local configuration | `docs/operations/security.md` |
+| Backup and DR | real restore, restored data queried and reconciled; RPO/RTO | 15/15 tables identical, 2/2 releases reproduce, 12/12 checks pass; restore 24 s, verified 83 s |
+| Performance | only measured bottlenecks | P1-P3 above |
+| Capacity and cost | measured sizes and rates, real current prices | AWS Price List (eu-west-1); USD 1,030 (50 robots) and 1,198 (500 robots) a month, mostly optional MSK and MWAA |
+| CLI and `.env.example` | developer entry point | `fleetforge` CLI; `.env.lakehouse.example` |
+
+## Final validation (2026-11-14, isolated `fleetforge-final` project)
+
+| Check | Result |
+|---|---|
+| End-to-end oracle | 12,607 deliveries: 0 differences between the oracle and the lakehouse, no event accepted twice; latest state equal in the oracle, PostgreSQL and Silver for all 40 robots |
+| 5,000 events/s × 300 s | 1,515,094 events, 4,997.5/s, p99 388 ms, lag max 2,514, drained; oracle matched |
+| 10,000 events/s × 60 s | 605,829 events, 9,995.9/s, peak 12,957/s, lag max 4,130, drained; oracle matched |
+| Fault game day | Milestone 2: 19 + 7 stack tests pass; lakehouse: L1-L14 pass (fault matrix) |
+| Scale | 1.06 M records: Bronze 128 s, full Silver 238-492 s, small delta 124 s (one core) |
+| Clean-environment CI | full-system workflow (Gates A, B, C) on a fresh runner |
 
 ## Defects found during execution
 
