@@ -4,19 +4,26 @@ name: full-system
 #   gate-a: Kafka -> Bronze -> incremental Silver -> releases -> dbt Gold -> Trino
 #   gate-b: the same pipeline under Airflow with six injected faults
 #   gate-c: release export, training, registration, drift
-# Manual only: one run takes about an hour of runner time.
+# Manual only, because one run takes about an hour of runner time: dispatch it, or add
+# the label "full-system" to a pull request.
 on:
   workflow_dispatch:
     inputs:
       gates:
         description: "Gates to run"
         default: "a b c"
+  pull_request:
+    types: [labeled]
+
+env:
+  GATES: ${{ inputs.gates || 'a b c' }}
 
 permissions:
   contents: read
 
 jobs:
   gates:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'full-system'
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     steps:
@@ -36,14 +43,14 @@ jobs:
           docker compose --profile core up -d --wait kafka schema-registry
 
       - name: Gate A
-        if: contains(inputs.gates, 'a')
+        if: contains(env.GATES, 'a')
         run: make -f lakehouse.mk lake-gate-a
       - name: Gate C
-        if: contains(inputs.gates, 'a') && contains(inputs.gates, 'c')
+        if: contains(env.GATES, 'a') && contains(env.GATES, 'c')
         run: make -f lakehouse.mk lake-gate-c
 
       - name: Gate B (Airflow, Spark jobs, Trino, Kafka on one runner)
-        if: contains(inputs.gates, 'b')
+        if: contains(env.GATES, 'b')
         env:
           FLEETFORGE_PIPELINE_SCHEDULE: ""
         run: |
