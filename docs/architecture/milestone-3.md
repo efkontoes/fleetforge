@@ -360,9 +360,9 @@ tests (no JVM, but not the engines this milestone teaches).
 | 1b | Spark jobs and lakehouse stack | Spark Bronze columns = Python reference; insert-if-absent on Iceberg; Spark Silver = Python reference (differential); unchanged inputs → no new snapshot; late batch → new build, previous readable by snapshot; checkpoint survives compaction | **done: 9 Spark tests pass (incl. scenario check and two crash-restart tests)** |
 | 1c | Trino query | Trino results = reference; time travel; quarantine joins to source bytes; types as documented | **done: 4 Trino tests pass** |
 | 1d | Real Kafka source | ingest, replay, topic recreation refused; Avro with real registry ids to Silver | **done: 2 Kafka tests pass** |
-| 2 | Incremental Silver | Process only new Bronze snapshots (Iceberg incremental read), MERGE by identity with per-robot state; **equals the full rebuild** on randomized scenarios; compaction and snapshot expiry jobs | planned |
-| 3 | Gold products | Both products built from a pinned Silver build; changed-days recomputation; release table with content hash; training-readiness checks reported, release stays CANDIDATE | planned |
-| 4 | Operations | Scheduling entry points, metrics (lag Bronze vs Kafka, rejection rates), reconciliation M2 quarantine vs Silver outcomes, retention policy (Bronze kept beyond Kafka's 7 days), runbook | planned |
+| 2 | Incremental Silver | U(S, ΔB, ΔR) equals the full rebuild; checkpoint; crash, conflict and replay safe; maintenance | **done**: 37 differential unit tests (three wrong closures each fail); Spark equals rebuild and reference; Gate A on 46,696 records (ADR 0017) |
+| 3 | Gold products | dbt models on Trino pinned to a Silver build; frozen final days; immutable, tagged releases with content hash | **done**: dbt output equals the reference (28/28 dbt tests); releases reproduce after newer builds and expiry (ADR 0018) |
+| 4 | Operations | job runner with retry-aware exit codes, run and lineage records, freshness SLO job, exporter, alerts, runbook, reconciliation, maintenance, DR | **done**: promtool rule tests; reconciliation incl. an independent Kafka count; DR restore test (see `docs/reviews/platform-execution.md`) |
 
 ## 8. Test execution and evidence
 
