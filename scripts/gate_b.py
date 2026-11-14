@@ -46,6 +46,13 @@ def airflow(*args: str) -> str:
     return sh(*LAKE, "exec", "-T", "airflow-scheduler", "airflow", *args)
 
 
+def airflow_json(*args: str):
+    """The CLI's JSON, skipping the log lines Airflow prints around it."""
+    out = airflow(*args, "--output", "json")
+    start = min(i for i in (out.find("["), out.find("{")) if i >= 0)
+    return json.JSONDecoder().raw_decode(out[start:])[0]
+
+
 def trigger(dag: str, conf: dict | None = None) -> str:
     run_id = f"gate-b-{dag}-{int(time.time() * 1000)}"
     airflow(
@@ -55,13 +62,13 @@ def trigger(dag: str, conf: dict | None = None) -> str:
 
 
 def states(dag: str, run_id: str) -> dict[str, str]:
-    out = airflow("tasks", "states-for-dag-run", dag, run_id, "--output", "json")
-    return {t["task_id"]: t["state"] for t in json.loads(out)}
+    return {
+        t["task_id"]: t["state"] for t in airflow_json("tasks", "states-for-dag-run", dag, run_id)
+    }
 
 
 def run_state(dag: str, run_id: str) -> str:
-    out = airflow("dags", "list-runs", dag, "--output", "json")
-    return next(r["state"] for r in json.loads(out) if r["run_id"] == run_id)
+    return next(r["state"] for r in airflow_json("dags", "list-runs", dag) if r["run_id"] == run_id)
 
 
 def wait(dag: str, run_id: str, minutes: int = 40) -> str:
@@ -89,8 +96,8 @@ def job_container() -> str | None:
 
 
 def tries(dag: str, run_id: str) -> dict[str, int]:
-    out = airflow("tasks", "states-for-dag-run", dag, run_id, "--output", "json")
-    return {t["task_id"]: int(t.get("try_number") or 0) for t in json.loads(out)}
+    rows = airflow_json("tasks", "states-for-dag-run", dag, run_id)
+    return {t["task_id"]: int(t.get("try_number") or 0) for t in rows}
 
 
 def publish(batch: int) -> int:
