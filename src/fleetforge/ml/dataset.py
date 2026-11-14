@@ -1,10 +1,4 @@
-"""Features and a synthetic label from an exported release.
-
-The task: will the robot touch the warehouse boundary within the next HORIZON steps of
-its episode? The simulator clamps positions at the walls, so the label is a real event
-in the data, but it is SYNTHETIC: it says nothing about real robots. Features use only
-the current and past steps; the label uses only future ones.
-"""
+"""Features (past steps only) and the synthetic wall-contact label (future steps), ADR 0020."""
 
 from __future__ import annotations
 
@@ -56,11 +50,7 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_label(df: pd.DataFrame) -> pd.DataFrame:
-    """Label from the next HORIZON steps.
-
-    Rows without a full horizon, and rows already at a wall, are dropped: the question
-    is whether the robot will reach one.
-    """
+    """Label from the next HORIZON steps; rows without a full horizon or already at a wall go."""
     touch = (df["dist_wall"] <= EDGE_M).astype(int)
     by_episode = touch.groupby(df["episode_id"])
     future = by_episode.transform(

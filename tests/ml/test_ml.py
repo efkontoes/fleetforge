@@ -71,7 +71,11 @@ def test_training_tracks_and_registers_a_model(tmp_path):
     export.mkdir()
     frames = []
     for i in range(60):
-        xs = np.clip(np.cumsum(rng.uniform(-0.3, 0.3, 200)) + rng.uniform(1, 49), 0, 50)
+        steps = rng.uniform(-0.3, 0.3, 200)
+        if i % 2:  # every other episode drifts into the wall, so each split has positives
+            xs = np.clip(np.cumsum(steps - 0.1) + rng.uniform(5, 15), 0, 50)
+        else:
+            xs = np.clip(np.cumsum(steps) + rng.uniform(15, 35), 0, 50)
         split = ["train", "validation", "test"][i % 3]
         frames.append(episode(list(xs), f"e{i}", f"r{i % 7}", split))
     pd.concat(frames).to_parquet(export / "train.parquet")

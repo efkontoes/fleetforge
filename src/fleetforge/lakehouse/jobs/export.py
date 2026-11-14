@@ -1,7 +1,5 @@
 """Export a dataset release as Parquet files with a manifest, checksums and a data card.
 
-The rows come from the release's tagged snapshot in observation_id order, so the same
-release exported by the same image gives byte-identical files.
 python -m fleetforge.lakehouse.jobs.export --release-id r1 --to /exports
 """
 

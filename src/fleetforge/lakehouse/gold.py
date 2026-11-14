@@ -33,10 +33,7 @@ def _seconds(later: datetime, earlier: datetime) -> float:
 def open_retry_robots(
     outcomes: Iterable[Mapping[str, Any]], key_robot: Mapping[tuple, str] | None = None
 ) -> tuple[set[str], bool]:
-    """Robots with records a later build may still accept, and whether one names no robot.
-
-    A record whose payload could not be read is attributed by its Kafka key (`key_robot`).
-    """
+    """Robots with records a later build may still accept (unreadable ones by Kafka key)."""
     robots, robotless = set(), False
     for o in outcomes:
         if o["outcome"] in ("REJECTED", "UNRESOLVED") and o["retry_eligible"]:

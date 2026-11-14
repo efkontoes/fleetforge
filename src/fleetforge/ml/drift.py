@@ -1,13 +1,4 @@
-"""Feature drift between a reference dataset (training) and a newer one.
-
-Three views, each with a caveat:
-* PSI on reference-quantile bins: easy to threshold (0.1 watch, 0.25 act), but it
-  depends on the binning and ignores order within a bin.
-* Kolmogorov-Smirnov: a test, so with tens of thousands of rows tiny shifts become
-  "significant"; read the statistic, not only the p-value.
-* Wasserstein distance: in the feature's own units, so it is comparable over time for
-  one feature but not across features.
-"""
+"""Feature drift between the training data and newer data (caveats in ADR 0020)."""
 
 from __future__ import annotations
 

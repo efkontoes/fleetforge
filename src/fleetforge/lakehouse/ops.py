@@ -1,8 +1,4 @@
-"""Job runs and lineage, kept in the catalog database for monitoring and audit.
-
-Lineage events follow the OpenLineage RunEvent format, so any OpenLineage consumer can
-read them; datasets carry the Iceberg snapshot id as their version.
-"""
+"""Job runs and OpenLineage events, kept in the catalog database for monitoring and audit."""
 
 from __future__ import annotations
 

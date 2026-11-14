@@ -1,10 +1,4 @@
-"""Incremental Silver: recompute only what a change can reach (ADR 0017).
-
-A change reaches rows that share its event_id or a correction link, and rows of its
-robot from its boot on (a later boot has a greater ordering key, and a new arrival never
-alters what earlier arrivals saw). The update recomputes that closure and must equal a
-full rebuild.
-"""
+"""Incremental Silver: recompute only the rows a change can reach (ADR 0017)."""
 
 from __future__ import annotations
 
@@ -57,11 +51,7 @@ def link_keys(rows: Iterable[Mapping[str, Any]]) -> set[str]:
 
 def closure(rows: list[Mapping[str, Any]], changed: list[Mapping[str, Any]],
             whole: set[str]) -> tuple[dict[str, int], set[str]]:  # fmt: skip
-    """Per robot the first boot to recompute, and the link keys of that scope.
-
-    `whole` lists robots whose every row must be recomputed (re-prepared rows can change
-    what later arrivals of any boot saw).
-    """
+    """Per robot the first boot to recompute, and the link keys of that scope."""
     bounds = dict.fromkeys(whole, 0)
 
     def lower(robot: str | None, boot: int | None) -> bool:
