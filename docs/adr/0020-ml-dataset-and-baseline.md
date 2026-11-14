@@ -35,9 +35,13 @@ pretends to be real would be worse than none.
 * **MLflow, lightly.** `mlflow-skinny` with a file store (opted in explicitly), models
   saved with skops, telemetry disabled. One reviewed type is trusted, only for models
   the same run wrote. The model with the better validation PR-AUC is registered.
-* **Drift with caveats.** PSI on reference quantiles, the Kolmogorov-Smirnov statistic
-  and the Wasserstein distance per feature; each has a known blind spot, written in
-  `ml/drift.py`.
+* **Drift with caveats.** Three views per feature, each with a blind spot:
+  * PSI on reference-quantile bins is easy to threshold (0.1 watch, 0.25 act), but it
+    depends on the binning and ignores order within a bin.
+  * The Kolmogorov-Smirnov test turns tiny shifts "significant" at tens of thousands
+    of rows; read the statistic, not only the p-value.
+  * The Wasserstein distance is in the feature's units, so it compares one feature
+    over time but not features with each other.
 
 ## Results (Gate C, release gate-r2, 27,938 rows)
 | Split | Model | PR-AUC | F1 | Positive rate |
