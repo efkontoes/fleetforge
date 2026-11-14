@@ -16,6 +16,7 @@ from fleetforge.lakehouse.silver import (
     OUTCOME_COLUMNS,
     TELEMETRY_TOPIC,
     SchemaArchiveIncomplete,
+    archive_fingerprint,
     build,
     build_id,
     content_fingerprint,
@@ -180,6 +181,20 @@ def test_missing_schema_archive_entry_aborts_instead_of_quarantining():
     framed = next(r for r in rows if r["value_schema_id"] == fx.SCHEMA_V2)
     with pytest.raises(SchemaArchiveIncomplete):
         prepare(framed, {fx.SCHEMA_V1: WRITERS[fx.SCHEMA_V1]}, ref)
+
+
+def test_a_found_schema_wins_and_changes_the_build_id():
+    """A registry restart can answer 404 for an id it holds. The archive then gets a
+    NOT_FOUND row first and a FOUND row later: FOUND must win, and the build id must
+    change so that Silver is rebuilt with the record decodable."""
+    absent = [{"schema_id": 1, "status": "NOT_FOUND", "schema_type": None, "schema_text": None}]
+    found = [r for r in fx.schema_archive() if r["schema_id"] == fx.SCHEMA_V1]
+    assert parse_writer_schemas(absent) == {1: None}
+    assert parse_writer_schemas(absent + found)[1] is not None
+    assert parse_writer_schemas(found + absent)[1] is not None  # order does not matter
+    fp_absent, fp_found = archive_fingerprint(absent), archive_fingerprint(absent + found)
+    assert fp_absent != fp_found == archive_fingerprint(found + absent)
+    assert build_id(7, "ref", fp_absent) != build_id(7, "ref", fp_found)
 
 
 def test_fingerprint_ignores_delivery_metadata_and_schema_revision():

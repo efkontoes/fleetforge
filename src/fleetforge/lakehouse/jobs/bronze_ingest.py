@@ -233,10 +233,15 @@ def archive_schemas(
         .where(F.col("source_topic").isin(avro_topics) & F.col("value_schema_id").isNotNull())
         .groupBy("value_schema_id").agg(F.min("source_topic").alias("topic"))
     )  # fmt: skip
-    have = spark.table(fq(BRONZE_REGISTRY_SCHEMAS)).select(
+    # Only FOUND is final. A NOT_FOUND id is asked again on every run: a restarting
+    # registry can answer 404 for an id it holds (observed in Milestone 2's CI).
+    archived = spark.table(fq(BRONZE_REGISTRY_SCHEMAS))
+    found = archived.where(F.col("status") == "FOUND").select(
         F.col("schema_id").alias("value_schema_id")
     )
-    missing = wanted.join(have, "value_schema_id", "left_anti").collect()
+    known_absent = {r[0] for r in archived.where(F.col("status") == "NOT_FOUND")
+                    .select("schema_id").distinct().collect()}  # fmt: skip
+    missing = wanted.join(found, "value_schema_id", "left_anti").collect()
     if not missing:
         return 0
     client = registry_client(registry_url)
@@ -252,6 +257,8 @@ def archive_schemas(
             subject = subject_for(topic)
             if _registry_down(exc) or subject not in client.get_subjects(subject_prefix=subject):
                 raise RegistryUnavailable(f"schema {sid}: {exc}") from exc
+            if sid in known_absent:
+                continue  # still absent; already recorded
             rows.append({**base, "status": "NOT_FOUND", "schema_type": None,
                          "schema_text": None, "schema_sha256": None})  # fmt: skip
             continue
@@ -259,6 +266,8 @@ def archive_schemas(
         rows.append({**base, "status": "FOUND", "schema_type": reg.schema_type or "AVRO",
                      "schema_text": text,
                      "schema_sha256": hashlib.sha256(text.encode()).hexdigest()})  # fmt: skip
+    if not rows:
+        return 0
     ordered = [{c: row[c] for c in BRONZE_REGISTRY_SCHEMAS.column_names} for row in rows]
     df = spark.createDataFrame(ordered, schema=BRONZE_REGISTRY_SCHEMAS.spark_schema())
     df.writeTo(fq(BRONZE_REGISTRY_SCHEMAS)).append()

@@ -140,15 +140,29 @@ class Prepared:
 
 
 def parse_writer_schemas(archive: Iterable[Mapping[str, Any]]) -> dict[int, Any]:
-    """bronze.registry_schemas rows -> {schema_id: parsed schema | None (NOT_FOUND)}."""
+    """bronze.registry_schemas rows -> {schema_id: parsed schema | None (NOT_FOUND)}.
+    A FOUND row wins over NOT_FOUND rows for the same id, whatever their order."""
     out: dict[int, Any] = {}
     for r in archive:
         sid = int(r["schema_id"])
         if r["status"] == "FOUND":
             out[sid] = fastavro.parse_schema(json.loads(r["schema_text"]))
         else:
-            out[sid] = None
+            out.setdefault(sid, None)
     return out
+
+
+def archive_fingerprint(archive: Iterable[Mapping[str, Any]]) -> str:
+    """Hash of the schema archive as Silver sees it. Part of the build id: an id that
+    turns from NOT_FOUND to FOUND must trigger a rebuild."""
+    effective = {}
+    for r in archive:
+        sid = int(r["schema_id"])
+        digest = hashlib.sha256((r["schema_text"] or "").encode()).hexdigest()
+        if r["status"] == "FOUND" or sid not in effective:
+            effective[sid] = [sid, r["status"], digest]
+    body = json.dumps(sorted(effective.values()), separators=(",", ":"))
+    return hashlib.sha256(body.encode()).hexdigest()
 
 
 def _errors_json(errors: Iterable[Mapping[str, Any]]) -> str:
@@ -317,10 +331,11 @@ def _s(v: Any) -> str | None:
 # --------------------------------------------------------------------------- set stage
 
 
-def build_id(bronze_snapshot_id: int, reference_fingerprint: str) -> str:
+def build_id(bronze_snapshot_id: int, reference_fingerprint: str, archive_fp: str = "") -> str:
     """Equal inputs and rules -> equal id -> identical rows. A rebuild with the same
-    id is a no-op, and any input change yields a new, distinguishable build."""
-    material = f"{bronze_snapshot_id}|{reference_fingerprint}|{TRANSFORM_VERSION}"
+    id is a no-op, and any input change (Bronze, reference data, schema archive,
+    rules) yields a new, distinguishable build."""
+    material = f"{bronze_snapshot_id}|{reference_fingerprint}|{archive_fp}|{TRANSFORM_VERSION}"
     return hashlib.sha256(material.encode()).hexdigest()[:24]
 
 

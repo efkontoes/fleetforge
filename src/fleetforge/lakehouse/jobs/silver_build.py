@@ -57,6 +57,7 @@ from fleetforge.lakehouse.silver import (
     Flag,
     SchemaArchiveIncomplete,
     SilverReason,
+    archive_fingerprint,
     build_id,
     parse_writer_schemas,
     prepare,
@@ -326,7 +327,7 @@ def build_silver(
         ]
 
     ref = build_reference(small(FIRMWARE_TOPIC), small(ROBOT_EVENTS_TOPIC))
-    bid = build_id(int(snap), ref.fingerprint())
+    bid = build_id(int(snap), ref.fingerprint(), archive_fingerprint(archive))
     published = snapshot_summary(spark, SILVER_TELEMETRY_EVENTS,
                                  current_snapshot_id(spark, SILVER_TELEMETRY_EVENTS))  # fmt: skip
     if published.get(BUILD_ID_PROPERTY) == bid:
@@ -339,6 +340,7 @@ def build_silver(
     props = {BUILD_ID_PROPERTY: bid, "fleetforge.silver.bronze-snapshot-id": str(snap),
              "fleetforge.silver.reference-fingerprint": ref.fingerprint(),
              "fleetforge.silver.transform-version": TRANSFORM_VERSION,
+             "fleetforge.silver.schema-archive-fingerprint": archive_fingerprint(archive),
              "fleetforge.silver.reference-anomalies": json.dumps(
                  [[a.source.kafka_offset, a.message] for a in ref.anomalies])}  # fmt: skip
     fw, robots = reference_rows(ref, bid)

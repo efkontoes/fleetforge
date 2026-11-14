@@ -33,6 +33,7 @@ from fleetforge.lakehouse.silver import (
     EVENT_COLUMNS,
     OUTCOME_COLUMNS,
     TELEMETRY_TOPIC,
+    archive_fingerprint,
     build,
     build_id,
     parse_writer_schemas,
@@ -182,7 +183,10 @@ def test_spark_silver_equals_the_python_reference(spark, clean_lake):
     report = sj.build_silver(spark)
     assert report["status"] == "built"
     ref, prepared = reference_silver((1, 2))
-    want = build(prepared, build_id=build_id(snap, ref.fingerprint()))
+    want = build(
+        prepared,
+        build_id=build_id(snap, ref.fingerprint(), archive_fingerprint(fx.schema_archive())),
+    )
     assert report["build_id"] == want.build_id
     events = _collect(spark.table(fq(SILVER_TELEMETRY_EVENTS)), EVENT_COLUMNS)
     outcomes = _collect(spark.table(fq(SILVER_TELEMETRY_RECORD_OUTCOMES)), OUTCOME_COLUMNS)

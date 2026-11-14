@@ -10,7 +10,8 @@ from collections import Counter
 
 import pytest
 
-from fleetforge.lakehouse.silver import build, build_id
+from fleetforge.lakehouse import fixtures as fx
+from fleetforge.lakehouse.silver import archive_fingerprint, build, build_id
 
 from .test_slice import reference_silver
 
@@ -30,7 +31,8 @@ def _expected(cur, runs):
         """SELECT summary['fleetforge.silver.bronze-snapshot-id']
                       FROM silver."telemetry_events$snapshots" ORDER BY committed_at DESC LIMIT 1""",
     )
-    return build(prepared, build_id=build_id(int(snap[0][0]), ref.fingerprint()))
+    archive_fp = archive_fingerprint(fx.schema_archive())
+    return build(prepared, build_id=build_id(int(snap[0][0]), ref.fingerprint(), archive_fp))
 
 
 def test_current_version_matches_the_reference(trino_cursor):

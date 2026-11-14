@@ -363,11 +363,28 @@ and 6 disruptive passed, with 148 unit and 99 integration/failure tests (run
 | B4 | Real Kafka: `illegal topic id '0/lHs2ReR2i9LwLnxKhAcg'` | librdkafka prints topic ids in standard base64 (`+`, `/`); the check assumed the URL-safe alphabet of Java clients | Accept both alphabets; quotes and backslashes still refused; unit test with the real id |
 | B5 | `Py4JNetworkError` mid-run; kernel: `Memory cgroup out of memory: Killed process (java)` at 1.35 GB RSS | Off-heap regions (metaspace, direct buffers, code cache, GC threads) are not bounded by the heap; with a 1 GB heap the JVM plus Python workers exceeded the container limit late in a long session | Off-heap caps, heap 768 MB, `MALLOC_ARENA_MAX=2` (glibc arenas fragment native memory outside every JVM limit), one Spark task thread (`local[1]`: Python workers 586 → 363 MiB), container 2 GiB. A 1 GB heap was killed again late in a long session, and so was the 768 MB heap once without the arena cap and with two threads: the margin was luck, not design, until the budget was measured |
 | B6 | CI only: `PermissionError: [Errno 13] Permission denied: '.env'` in the Kafka phase | Milestone 2's settings read `./.env`, which holds its secrets with mode 600; the Spark container (uid 10001) ran with the checkout as its working directory. Locally the Milestone 3 worktree had no `.env` | The container's working directory is its home; tests run by absolute path. The secrets file stays unreadable to the lakehouse, as it should. Reproduced and verified locally first |
+| B7 | Found by reading a Milestone 2 CI failure (below), not by a lakehouse test failing | The schema archive treated NOT_FOUND as final, using the same "404 while the registry holds the subject" rule as Milestone 2, and the archive was not part of the Silver build id. A registry restart answering 404 for an existing id would have quarantined valid records as malformed permanently, and a corrected archive would not have triggered a rebuild | Only FOUND is final: NOT_FOUND ids are asked again every run, and a FOUND row wins. The archive's fingerprint is part of the build id. Unit test plus all 20 stack tests rerun |
 
 Concerns that did **not** materialise: pandas/Arrow conversion in `mapInPandas`,
 struct comparison in the out-of-order window, Iceberg JDBC catalog initialisation,
 path-style S3 addressing, and Trino reading Spark-written metadata all worked on the
 first execution.
+
+### Milestone 2 finding (reported, not changed here)
+
+On PR #2, Milestone 2's CI failed intermittently on the docs-only commit `2b49af4`,
+while the identical code had passed one commit earlier:
+* first attempt: `test_schema_evolution_on_the_real_registry` hung for its 5-minute
+  timeout (`Connect to [::1]:29092 failed: Connection refused`);
+* re-run: `test_registry_outage_pauses_projection_and_never_quarantines` failed. A
+  valid event (expected `BATTERY_OUT_OF_RANGE`) was quarantined as `MALFORMED_PAYLOAD`
+  during the registry outage. That is the case `kafka/codec.py` describes as
+  "suspected but NOT observed": a restarting registry answering 404 for an id it
+  holds, after it has already reloaded the subject. It has now been observed.
+
+This is a Milestone 2 data-correctness defect (a valid event can be quarantined
+permanently). It needs its own fix and review on `main`; it is not changed on this
+branch. The lakehouse no longer depends on that rule being right (B7).
 
 ## Integration with Milestone 2
 
