@@ -48,3 +48,18 @@ Pending.
 | D9 | Gate A at 46,696 records (full rebuild and Python reference agreed; incremental differed in 1 outcome row) | a correction that a firmware change turned into a rejection lost its `correction_of`, so the closure no longer reached its old target, whose outcome kept a stale `superseded_by` | rejected prepared rows keep the `correction_of` they could read (rule version 3), and three corpora that reproduced it in Python are regression tests; this also holds after a crash, unlike capturing the old links in memory |
 | D10 | first Airflow run on the main catalog | the JDBC catalog was created by Spark as schema V0 (no views), and `tableExists` fails there; the tests never saw it because Trino had upgraded the test catalog | `jdbc.schema-version=V1`, which Iceberg migrates on first use, plus a unit assertion |
 | D11 | same Airflow run | reconciliation and freshness crashed on a lake with no Silver build yet | both report "nothing to check" instead |
+| D12 | final validation, API restart while publishing | Milestone 2's API died after a container restart: Docker remounts its metrics tmpfs as root 755 and the workers (uid 10001) cannot write | tmpfs mounted with the app's uid and mode 0700; `test_api_serves_again_after_a_container_restart` fails without the fix and passes with it |
+| D13 | CI, Milestone 2 stack job | confluent-kafka 2.16's serializer first asks the registry for Confluent-only "associations", and with no client timeout one unanswered request hung the job for 600 s | subject name strategy named explicitly (topic, as the contract says), and a 10 s registry client timeout, which callers already treat as "registry unavailable" |
+| D14 | CI, lakehouse Kafka phase | Spark 4.1 mis-plans an anti-join with an Iceberg table created earlier in the same session ("computeStats called before pushdown") | the schema archive, a few rows, is read into Python; snapshot ids come from Iceberg's API with `refresh()` instead of `refreshTable` |
+
+## Measured optimisations (Milestone 6)
+
+Only measured bottlenecks were changed. Numbers are on one Spark core in a 2 GiB
+container (`docs/reviews/evidence/scale-silver.json`, `gate-a.json`).
+
+| # | Bottleneck (measured) | Change | Before | After |
+|---|---|---|---|---|
+| P1 | incremental scope covered every active robot's full history (Gate A run 3: 62 new rows, 45,442 recomputed) | bound the closure by boot (ADR 0017) | 45,442 rows | 2,785 rows |
+| P2 | at 1.06 M rows, a 6,113-row delta took 223 s: the closure rescanned the prepared table (72.8 s) and `NOT MATCHED BY SOURCE` rewrote all events (61.0 s) | closure on a cached key projection; events swap as a keyed MERGE with explicit deletes | 223 s | 124 s (scope 31.8 s, swap 17.8 s) |
+| P3 | re-preparing 98% of a 1 M-row table incrementally took 728 s against 238 s for a full rebuild | above 30% of a table of 100,000 rows or more, build in full | 728 s | full rebuild instead |
+

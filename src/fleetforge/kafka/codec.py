@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import fastavro
-from confluent_kafka.schema_registry import SchemaRegistryClient
+from confluent_kafka.schema_registry import SchemaRegistryClient, topic_subject_name_strategy
 from confluent_kafka.schema_registry.avro import AvroSerializer
 from confluent_kafka.schema_registry.error import SchemaRegistryError
 from confluent_kafka.serialization import MessageField, SerializationContext
@@ -67,7 +67,13 @@ class TelemetryEncoder:
         self._ser = AvroSerializer(
             client,
             schema_str(revision),
-            conf={"auto.register.schemas": False, "use.latest.version": False},
+            # Named explicitly: 2.16's default first asks the registry for Confluent-only
+            # associations, a call Apicurio does not answer reliably (it hung CI for 600 s).
+            conf={
+                "auto.register.schemas": False,
+                "use.latest.version": False,
+                "subject.name.strategy": topic_subject_name_strategy,
+            },  # fmt: skip
         )
 
     def encode(self, record: dict[str, Any]) -> bytes:
