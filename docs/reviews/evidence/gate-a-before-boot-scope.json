@@ -1,0 +1,5 @@
+[{"mode": "FULL", "new_bronze_rows": 28513, "reprepared_rows": 0, "scope_robots": 40, "scope_rows": 28513, "telemetry_rows": 28513},
+ {"mode": "INCREMENTAL", "new_bronze_rows": 15666, "reprepared_rows": 0, "scope_robots": 40, "scope_rows": 44116, "telemetry_rows": 44179},
+ {"mode": "INCREMENTAL", "new_bronze_rows": 2455, "reprepared_rows": 13260, "scope_robots": 40, "scope_rows": 46541, "telemetry_rows": 46634},
+ {"mode": "INCREMENTAL", "new_bronze_rows": 62, "reprepared_rows": 1163, "scope_robots": 39, "scope_rows": 45442, "telemetry_rows": 46696},
+ {"mode": "FULL", "new_bronze_rows": 46696, "reprepared_rows": 0, "scope_robots": 40, "scope_rows": 46696, "telemetry_rows": 46696}]

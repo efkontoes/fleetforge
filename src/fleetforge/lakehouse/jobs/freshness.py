@@ -42,6 +42,8 @@ def measure(
     from pyspark.sql import functions as F
 
     now = now or datetime.now(UTC)
+    if not spark.catalog.tableExists(fq(SILVER_BUILD_LOG)):
+        return {"records": 0, "topic": topic, "measured_at": now, "slo_met": None}
     since = now - timedelta(hours=hours)
     builds = [
         (r[0], r[1])

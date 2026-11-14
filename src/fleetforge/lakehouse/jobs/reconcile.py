@@ -86,6 +86,8 @@ def check_kafka(spark: SparkSession, checks: Checks, bootstrap: str, topic: str)
 
 def reconcile(spark: SparkSession, kafka_bootstrap: str | None = None,
               telemetry_topic: str = TELEMETRY_TOPIC) -> list[dict[str, Any]]:  # fmt: skip
+    if not spark.catalog.tableExists(fq(SILVER_BUILD_LOG)):
+        return []  # no Silver build yet: nothing to reconcile
     builds = spark.table(fq(SILVER_BUILD_LOG)).orderBy("committed_at", ascending=False).limit(1)
     found = builds.collect()
     if not found:

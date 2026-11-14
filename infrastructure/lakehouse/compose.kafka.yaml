@@ -15,4 +15,4 @@ services:
 networks:
   milestone2:
     external: true
-    name: fleetforge_default
+    name: ${M2_NETWORK:-fleetforge_default}

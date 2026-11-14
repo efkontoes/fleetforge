@@ -50,6 +50,7 @@ def test_spark_conf_wires_iceberg_jdbc_catalog_and_s3():
     assert conf["spark.sql.catalog.lake"] == "org.apache.iceberg.spark.SparkCatalog"
     assert conf["spark.sql.catalog.lake.catalog-impl"] == "org.apache.iceberg.jdbc.JdbcCatalog"
     assert conf["spark.sql.catalog.lake.io-impl"] == "org.apache.iceberg.aws.s3.S3FileIO"
+    assert conf["spark.sql.catalog.lake.jdbc.schema-version"] == "V1"  # views, found by Airflow
     assert conf["spark.sql.session.timeZone"] == "UTC"
     assert conf["spark.jars.packages"].split(",") == list(versions.SPARK_PACKAGES)
     assert "-XX:MaxMetaspaceSize=" in conf["spark.driver.extraJavaOptions"]  # off-heap bounded

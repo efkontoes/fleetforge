@@ -35,6 +35,8 @@ def spark_conf(s: LakehouseSettings) -> dict[str, str]:
         f"{cat}.uri": s.catalog_jdbc_url,
         f"{cat}.jdbc.user": s.catalog_user,
         f"{cat}.jdbc.password": s.catalog_password,
+        # V1 adds view support; a catalog created as V0 is migrated on first use.
+        f"{cat}.jdbc.schema-version": "V1",
         f"{cat}.warehouse": s.warehouse,
         f"{cat}.io-impl": "org.apache.iceberg.aws.s3.S3FileIO",
         f"{cat}.s3.endpoint": s.s3_endpoint,
