@@ -1,0 +1,49 @@
+name: platform
+
+# Platform checks, fast level: DAGs, dbt and alert rules, checked
+# without starting any data services. Runs on every pull request.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: platform-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  dags-and-dbt:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - run: sh scripts/make-lakehouse-env.sh
+      - name: Airflow image and DAG checks (imports, retries, timeouts, pools, order)
+        run: |
+          docker build -f infrastructure/airflow/Dockerfile -t fleetforge-airflow:dev .
+          docker run --rm -v "$PWD/infrastructure/airflow/check_dags.py:/check_dags.py:ro" \
+            fleetforge-airflow:dev python /check_dags.py
+      - name: Airflow compose file is valid
+        run: |
+          docker network create fleetforge_default
+          docker compose --env-file .env.lakehouse -f infrastructure/lakehouse/compose.yaml \
+            -f infrastructure/airflow/compose.yaml --profile airflow config -q
+      - name: dbt project parses (models, contracts, tests)
+        run: |
+          docker build -f infrastructure/lakehouse/dbt/Dockerfile -t fleetforge-lakehouse-dbt:dev .
+          docker run --rm -e DBT_TARGET=test fleetforge-lakehouse-dbt:dev parse
+
+
+  monitoring:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - name: Alert rules fire as their tests expect
+        run: |
+          docker run --rm -v "$PWD/infrastructure/lakehouse/prometheus:/rules:ro" \
+            --entrypoint promtool prom/prometheus:v3.5.0 test rules /rules/lakehouse-alerts.test.yml

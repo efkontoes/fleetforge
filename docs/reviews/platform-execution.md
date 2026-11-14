@@ -25,7 +25,14 @@ a time.
 | Gate A | real engines, tens of thousands of observations, replay, idempotence, old release reproduced, Spark killed at a commit boundary | pending |
 
 ## Milestone 4: orchestration and quality
-Pending.
+
+| Workstream | Acceptance | Status |
+|---|---|---|
+| Airflow DAGs | pipeline, release, maintenance and backfill DAGs; idempotent, retried with backoff, bounded by timeouts; exit 65 fails without retry; one-slot writer pool | 4 DAGs pass the policy checks inside the Airflow 3.3.2 image; maintenance DAG ran end to end through the scheduler, the socket proxy and Spark job containers (it found D10 and D11) |
+| dbt | analytical Gold on Trino, no second Silver; tests for keys, not-null, ranges, enums, referential integrity, cross-table and release consistency, freshness, custom invariants | 28 data tests pass in Gate A and the lakehouse CI |
+| Lineage | OpenLineage RunEvents with Iceberg snapshot ids as dataset versions | written by every job to `lakehouse_ops.lineage_events` |
+| Monitoring | exporter, alert rules with runbook links, freshness SLO measured | promtool rule tests pass; exporter reads real job runs; freshness job ships with the pipeline DAG |
+| Gate B | orchestrated recovery from six isolated faults | runs on a CI runner (needs about 5.5 GiB) |
 
 ## Milestone 5: ML dataset and baseline
 Pending.

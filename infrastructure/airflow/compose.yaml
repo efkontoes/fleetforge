@@ -1,0 +1,92 @@
+# Airflow for the lakehouse, layered on the lakehouse stack and joined to Milestone 2's
+# network, where job containers run so they reach Kafka, the registry, Garage, the
+# catalog and Trino. Jobs start through a socket proxy that allows only what the
+# Docker operator needs.
+#
+#   docker compose --env-file .env.lakehouse -f infrastructure/lakehouse/compose.yaml \
+#     -f infrastructure/airflow/compose.yaml --profile airflow up -d
+x-airflow: &airflow
+  build: {context: ../.., dockerfile: infrastructure/airflow/Dockerfile}
+  image: fleetforge-airflow:dev
+  profiles: ["airflow"]
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__PARALLELISM: "4"
+    AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "True"
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:?run scripts/make-lakehouse-env.sh}
+    AIRFLOW__CORE__SENSITIVE_VAR_CONN_NAMES: access_key
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
+    AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: admin:admin
+    AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE: /opt/airflow/auth/passwords.json
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:?}
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD:?}@catalog-db:5432/airflow
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "True"
+    AIRFLOW_VAR_LAKEHOUSE_CATALOG_PASSWORD: ${LAKEHOUSE_CATALOG_PASSWORD:?}
+    AIRFLOW_VAR_LAKEHOUSE_S3_ACCESS_KEY: ${LAKEHOUSE_S3_ACCESS_KEY:?}
+    AIRFLOW_VAR_LAKEHOUSE_S3_SECRET_KEY: ${LAKEHOUSE_S3_SECRET_KEY:?}
+    AIRFLOW_VAR_LAKEHOUSE_CATALOG_JDBC_URL: ${AIRFLOW_LAKE_CATALOG_URL:-jdbc:postgresql://catalog-db:5432/iceberg_catalog}
+    AIRFLOW_VAR_LAKEHOUSE_WAREHOUSE: ${AIRFLOW_LAKE_WAREHOUSE:-s3://lakehouse/warehouse}
+    AIRFLOW_VAR_LAKEHOUSE_DBT_TARGET: ${AIRFLOW_DBT_TARGET:-lake}
+    AIRFLOW_VAR_LAKEHOUSE_TELEMETRY_TOPIC: ${AIRFLOW_TELEMETRY_TOPIC:-telemetry.raw.v1}
+    FLEETFORGE_PIPELINE_SCHEDULE: ${FLEETFORGE_PIPELINE_SCHEDULE-*/10 * * * *}
+    FLEETFORGE_JOB_NETWORK: ${M2_NETWORK:-fleetforge_default}
+    AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:?}
+    AIRFLOW_DB_PASSWORD: ${AIRFLOW_DB_PASSWORD:?}
+  volumes: ["airflow-auth:/opt/airflow/auth"]
+  networks: [default, milestone2]
+
+services:
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:v0.5.0
+    profiles: ["airflow"]
+    environment: {CONTAINERS: 1, IMAGES: 1, NETWORKS: 1, POST: 1, INFO: 1, VERSION: 1}
+    volumes: ["/var/run/docker.sock:/var/run/docker.sock:ro"]
+    mem_limit: 48m
+
+  airflow-init:
+    <<: *airflow
+    depends_on:
+      catalog-db: {condition: service_healthy}
+    entrypoint: ["python", "/opt/airflow/init_airflow.py"]
+    volumes: ["airflow-auth:/opt/airflow/auth"]
+    restart: "no"
+
+  airflow-apiserver:
+    <<: *airflow
+    command: ["api-server"]
+    depends_on:
+      airflow-init: {condition: service_completed_successfully}
+    ports: ["127.0.0.1:8085:8080"]
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8080/api/v2/version"]
+      interval: 10s
+      retries: 30
+    mem_limit: 640m
+
+  airflow-scheduler:
+    <<: *airflow
+    command: ["scheduler"]
+    depends_on:
+      airflow-apiserver: {condition: service_healthy}
+    mem_limit: 640m
+
+  airflow-dag-processor:
+    <<: *airflow
+    command: ["dag-processor"]
+    depends_on:
+      airflow-init: {condition: service_completed_successfully}
+    mem_limit: 384m
+
+  # Job containers run on Milestone 2's network; these services join it too.
+  garage: {networks: [default, milestone2]}
+  catalog-db: {networks: [default, milestone2]}
+  trino: {networks: [default, milestone2]}
+
+volumes:
+  airflow-auth:
+
+networks:
+  milestone2:
+    external: true
+    name: ${M2_NETWORK:-fleetforge_default}

@@ -1,0 +1,4 @@
+# Installed with Airflow 3.3.2's constraints for Python 3.12 (see Dockerfile).
+apache-airflow-providers-docker==4.5.9
+apache-airflow-providers-standard==1.19.0
+apache-airflow-providers-postgres==7.0.2
