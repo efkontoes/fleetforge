@@ -12,7 +12,7 @@ Identity columns are a logical key. Iceberg does not enforce uniqueness: the wri
 
 Immutable copy of every ingested Kafka record, schema-agnostic. One row per (kafka_topic_id, kafka_partition, kafka_offset).
 
-* Status: implemented (slice 1)
+* Written by: spark
 * Identity: `(kafka_topic_id, kafka_partition, kafka_offset)`
 * Partitioning: `source_topic, days(ingested_at)`
 * Sort order: `kafka_partition, kafka_offset`
@@ -38,7 +38,7 @@ Immutable copy of every ingested Kafka record, schema-agnostic. One row per (kaf
 
 Archive of every schema id seen in Bronze, so history stays decodable even if the schema registry loses its storage. Insert-if-absent; an id never changes meaning.
 
-* Status: implemented (slice 1)
+* Written by: spark
 * Identity: `(schema_id)`
 * Partitioning: unpartitioned
 * Sort order: none
@@ -59,7 +59,7 @@ Archive of every schema id seen in Bronze, so history stays decodable even if th
 
 Validated canonical telemetry: one row per accepted event_id, canonical units. Ordered by (robot_id, boot_number, sequence_number), never by robot clock.
 
-* Status: implemented (slice 1)
+* Written by: spark
 * Identity: `(event_id)`
 * Partitioning: `days(observed_at), bucket(16, robot_id)`
 * Sort order: `robot_id, boot_number, sequence_number`
@@ -98,14 +98,14 @@ Validated canonical telemetry: one row per accepted event_id, canonical units. O
 | `kafka_offset` | BIGINT | long | bigint | no | Kafka offset within the partition. |
 | `kafka_timestamp` | TIMESTAMP | timestamptz | timestamp(6) with time zone | yes | Kafka timestamp of the accepted copy. |
 | `bronze_ingested_at` | TIMESTAMP | timestamptz | timestamp(6) with time zone | no | Bronze ingested_at of the accepted copy. |
-| `silver_build_id` | STRING | string | varchar | no | Hash of (Bronze snapshot, reference data, transform version): equal ids mean identical inputs and therefore identical rows. |
+| `silver_build_id` | STRING | string | varchar | no | Build that last computed this row (volatile; pin builds via silver.build_log). |
 | `transform_version` | STRING | string | varchar | no | Silver rule set version. |
 
 ## `silver.telemetry_record_outcomes`
 
 Exactly one row per Bronze telemetry record: what Silver did with it and why. The quarantine is the REJECTED subset; the payload stays in Bronze (join on coordinates).
 
-* Status: implemented (slice 1)
+* Written by: spark
 * Identity: `(kafka_topic_id, kafka_partition, kafka_offset)`
 * Partitioning: `outcome, days(bronze_ingested_at)`
 * Sort order: `kafka_partition, kafka_offset`
@@ -116,10 +116,10 @@ Exactly one row per Bronze telemetry record: what Silver did with it and why. Th
 | `kafka_topic_id` | STRING | string | varchar | no | Kafka topic id (incarnation). Changes when a topic is deleted and recreated. |
 | `kafka_partition` | INT | int | integer | no | Kafka partition. |
 | `kafka_offset` | BIGINT | long | bigint | no | Kafka offset within the partition. |
-| `outcome` | STRING | string | varchar | no | ACCEPTED, DUPLICATE or REJECTED. |
-| `reason_code` | STRING | string | varchar | yes | Set for REJECTED only. |
-| `error_category` | STRING | string | varchar | yes | PERMANENT_DATA for REJECTED rows. |
-| `retry_eligible` | BOOLEAN | boolean | boolean | no | Rejected only because reference data was missing; a rebuild after the reference data arrives can accept it. |
+| `outcome` | STRING | string | varchar | no | ACCEPTED, DUPLICATE, REJECTED, or UNRESOLVED (schema id not resolvable yet). |
+| `reason_code` | STRING | string | varchar | yes | Set for REJECTED and UNRESOLVED. |
+| `error_category` | STRING | string | varchar | yes | PERMANENT_DATA or UNRESOLVED. |
+| `retry_eligible` | BOOLEAN | boolean | boolean | no | The record may be accepted by a later build once reference data or a schema becomes available. |
 | `errors` | STRING | string | varchar | yes | JSON array of {code, field, message, ...} details. |
 | `event_id` | STRING | string | varchar | yes | event_id if it could be read. |
 | `robot_id` | STRING | string | varchar | yes | robot_id if it could be read. |
@@ -134,7 +134,7 @@ Exactly one row per Bronze telemetry record: what Silver did with it and why. Th
 
 Firmware unit contracts as of the Bronze snapshot (latest CDC state per key).
 
-* Status: implemented (slice 1)
+* Written by: spark
 * Identity: `(model_id, firmware_version)`
 * Partitioning: unpartitioned
 * Sort order: none
@@ -156,7 +156,7 @@ Firmware unit contracts as of the Bronze snapshot (latest CDC state per key).
 
 Robot models from RobotRegistered outbox events (robot model is immutable).
 
-* Status: implemented (slice 1)
+* Written by: spark
 * Identity: `(robot_id)`
 * Partitioning: unpartitioned
 * Sort order: none
@@ -173,11 +173,88 @@ Robot models from RobotRegistered outbox events (robot model is immutable).
 | `kafka_offset` | BIGINT | long | bigint | no | Kafka offset within the partition. |
 | `silver_build_id` | STRING | string | varchar | no | See silver.telemetry_events. |
 
+## `silver.telemetry_prepared`
+
+Row-stage output for every Bronze telemetry record, so incremental builds never re-decode history.
+
+* Written by: spark
+* Identity: `(kafka_topic_id, kafka_partition, kafka_offset)`
+* Partitioning: `bucket(16, robot_id)`
+* Sort order: `robot_id, ingested_at, kafka_partition, kafka_offset`
+* Extra properties: `write.parquet.bloom-filter-enabled.column.event_id=true`
+
+| Column | Spark | Iceberg | Trino | Null | Description |
+|---|---|---|---|---|---|
+| `source_topic` | STRING | string | varchar | no | Kafka topic name. |
+| `kafka_topic_id` | STRING | string | varchar | no | Kafka topic id (incarnation). Changes when a topic is deleted and recreated. |
+| `kafka_partition` | INT | int | integer | no | Kafka partition. |
+| `kafka_offset` | BIGINT | long | bigint | no | Kafka offset within the partition. |
+| `kafka_timestamp` | TIMESTAMP | timestamptz | timestamp(6) with time zone | yes | Kafka timestamp. |
+| `ingested_at` | TIMESTAMP | timestamptz | timestamp(6) with time zone | no | Bronze ingested_at (arrival order). |
+| `value_schema_id` | BIGINT | long | bigint | yes | Schema id from the framing. |
+| `status` | STRING | string | varchar | no | VALID or INVALID after the row stage. |
+| `reason_code` | STRING | string | varchar | yes | Row-stage rejection reason. |
+| `errors` | STRING | string | varchar | yes | JSON details of the rejection. |
+| `event_id` | STRING | string | varchar | yes | event_id if readable. |
+| `robot_id` | STRING | string | varchar | yes | robot_id if readable. |
+| `boot_id` | STRING | string | varchar | yes | Canonical field (VALID rows). |
+| `boot_number` | BIGINT | long | bigint | yes | Canonical field (VALID rows). |
+| `sequence_number` | BIGINT | long | bigint | yes | Canonical field (VALID rows). |
+| `observed_at` | TIMESTAMP | timestamptz | timestamp(6) with time zone | yes | Canonical field (VALID rows). |
+| `robot_model` | STRING | string | varchar | yes | Canonical field (VALID rows). |
+| `firmware_version` | STRING | string | varchar | yes | Canonical field (VALID rows). |
+| `battery_pct` | DOUBLE | double | double | yes | Canonical field (VALID rows). |
+| `x_m` | DOUBLE | double | double | yes | Canonical field (VALID rows). |
+| `y_m` | DOUBLE | double | double | yes | Canonical field (VALID rows). |
+| `heading_rad` | DOUBLE | double | double | yes | Canonical field (VALID rows). |
+| `motor_temp_c` | DOUBLE | double | double | yes | Canonical field (VALID rows). |
+| `lidar_ok` | BOOLEAN | boolean | boolean | yes | Canonical field (VALID rows). |
+| `source_battery_unit` | STRING | string | varchar | yes | Canonical field (VALID rows). |
+| `source_position_unit` | STRING | string | varchar | yes | Canonical field (VALID rows). |
+| `quality_flags` | ARRAY&lt;STRING&gt; | list&lt;string&gt; | array(varchar) | yes | Canonical field (VALID rows). |
+| `schema_version` | INT | int | integer | yes | Canonical field (VALID rows). |
+| `writer_schema_id` | BIGINT | long | bigint | yes | Canonical field (VALID rows). |
+| `producer_id` | STRING | string | varchar | yes | Canonical field (VALID rows). |
+| `produced_at` | TIMESTAMP | timestamptz | timestamp(6) with time zone | yes | Canonical field (VALID rows). |
+| `correction_of` | STRING | string | varchar | yes | Canonical field (VALID rows). |
+| `fingerprint` | STRING | string | varchar | yes | Business-content hash (VALID rows). |
+
+## `silver.build_log`
+
+One row per committed Silver build: its inputs, the snapshot it published and how much it recomputed. The newest row is the incremental checkpoint.
+
+* Written by: spark
+* Identity: `(build_id)`
+* Partitioning: unpartitioned
+* Sort order: none
+
+| Column | Spark | Iceberg | Trino | Null | Description |
+|---|---|---|---|---|---|
+| `build_id` | STRING | string | varchar | no | Deterministic id of this build. |
+| `mode` | STRING | string | varchar | no | FULL or INCREMENTAL. |
+| `base_build_id` | STRING | string | varchar | yes | Previous build (INCREMENTAL only). |
+| `transform_version` | STRING | string | varchar | no | Silver rule set version. |
+| `bronze_snapshot_id` | BIGINT | long | bigint | no | Bronze snapshot the build read. |
+| `bronze_max_ingested_at` | TIMESTAMP | timestamptz | timestamp(6) with time zone | no | Newest Bronze ingested_at covered. |
+| `reference_fingerprint` | STRING | string | varchar | no | Hash of the reference data. |
+| `archive_snapshot_id` | BIGINT | long | bigint | yes | Schema archive snapshot the build read. |
+| `archive_fingerprint` | STRING | string | varchar | no | Hash of the schema archive. |
+| `prepared_snapshot_id` | BIGINT | long | bigint | yes | silver.telemetry_prepared after the build. |
+| `outcomes_snapshot_id` | BIGINT | long | bigint | yes | silver.telemetry_record_outcomes after it. |
+| `events_snapshot_id` | BIGINT | long | bigint | yes | silver.telemetry_events after it. |
+| `new_bronze_rows` | BIGINT | long | bigint | no | Bronze telemetry rows new since the base. |
+| `reprepared_rows` | BIGINT | long | bigint | no | Older rows prepared again (reference/schema). |
+| `scope_robots` | BIGINT | long | bigint | no | Robots whose set stage was recomputed. |
+| `scope_rows` | BIGINT | long | bigint | no | Prepared rows fed to the set stage. |
+| `telemetry_rows` | BIGINT | long | bigint | no | Bronze telemetry rows in the build snapshot. |
+| `started_at` | TIMESTAMP | timestamptz | timestamp(6) with time zone | no | Build start. |
+| `committed_at` | TIMESTAMP | timestamptz | timestamp(6) with time zone | no | When this row was written. |
+
 ## `gold.robot_daily_telemetry`
 
 Fleet telemetry analytics: one row per robot and observed day, current events only.
 
-* Status: specified, not implemented yet
+* Written by: dbt
 * Identity: `(observed_date, robot_id)`
 * Partitioning: `months(observed_date)`
 * Sort order: none
@@ -189,27 +266,28 @@ Fleet telemetry analytics: one row per robot and observed day, current events on
 | `robot_model` | STRING | string | varchar | no | Robot model. |
 | `events` | BIGINT | long | bigint | no | Current accepted events. |
 | `boots` | BIGINT | long | bigint | no | Distinct boots with events that day. |
-| `expected_events` | BIGINT | long | bigint | no | Sum over boots of (max - min sequence_number + 1) within the day. |
-| `missing_sequences` | BIGINT | long | bigint | no | expected_events - events: lost, rejected or not yet arrived. |
+| `observed_positions` | BIGINT | long | bigint | no | Distinct (boot, sequence_number) seen. |
+| `expected_events` | BIGINT | long | bigint | no | observed_positions plus missing_sequences. |
+| `missing_sequences` | BIGINT | long | bigint | no | Sequence numbers absent between consecutive observed positions of a boot, counted on the day of the later observation, so gaps across midnight are not lost. |
 | `out_of_order_events` | BIGINT | long | bigint | no | Events with arrived_out_of_order. |
 | `duplicate_deliveries` | BIGINT | long | bigint | no | Sum of duplicate_deliveries. |
 | `corrected_events` | BIGINT | long | bigint | no | Current events that are corrections. |
 | `battery_pct_min` | DOUBLE | double | double | no | Minimum battery. |
 | `battery_pct_avg` | DOUBLE | double | double | no | Mean battery over events. |
 | `battery_pct_max` | DOUBLE | double | double | no | Maximum battery. |
-| `distance_m` | DOUBLE | double | double | no | Sum of straight-line steps between consecutive sequence numbers of a boot; steps across a sequence gap are not counted. |
+| `distance_m` | DOUBLE | double | double | no | Sum of straight-line steps between consecutive sequence numbers of a boot with non-decreasing observed_at; steps across gaps or clock regressions are skipped. |
 | `motor_temp_c_max` | DOUBLE | double | double | yes | Maximum motor temperature. |
 | `lidar_fault_events` | BIGINT | long | bigint | no | Events with lidar_ok = false. |
 | `first_observed_at` | TIMESTAMP | timestamptz | timestamp(6) with time zone | no | Earliest observed_at. |
 | `last_observed_at` | TIMESTAMP | timestamptz | timestamp(6) with time zone | no | Latest observed_at. |
-| `is_final` | BOOLEAN | boolean | boolean | no | Day older than the allowed lateness (7 days, Kafka retention): late arrivals can no longer change the row. |
+| `is_final` | BOOLEAN | boolean | boolean | no | Older than the correction window (14 days before the newest ingestion) and the robot has no open retry-eligible records (an unreadable record counts for the robot of its Kafka key, or for every robot without one). Final rows are frozen; recomputing them needs the reopen variables. |
 | `silver_build_id` | STRING | string | varchar | no | Silver build the row was computed from. |
 
 ## `gold.pipeline_daily_quality`
 
 Operational data quality: Silver outcomes per ingestion day, topic, outcome and reason.
 
-* Status: specified, not implemented yet
+* Written by: dbt
 * Identity: `(ingest_date, source_topic, outcome, reason_code)`
 * Partitioning: `months(ingest_date)`
 * Sort order: none
@@ -218,7 +296,7 @@ Operational data quality: Silver outcomes per ingestion day, topic, outcome and 
 |---|---|---|---|---|---|
 | `ingest_date` | DATE | date | date | no | UTC date of bronze_ingested_at. |
 | `source_topic` | STRING | string | varchar | no | Kafka topic. |
-| `outcome` | STRING | string | varchar | no | ACCEPTED, DUPLICATE or REJECTED. |
+| `outcome` | STRING | string | varchar | no | ACCEPTED, DUPLICATE, REJECTED or UNRESOLVED. |
 | `reason_code` | STRING | string | varchar | no | Rejection reason, or NONE for ACCEPTED and DUPLICATE (key columns are never NULL). |
 | `retry_eligible` | BOOLEAN | boolean | boolean | no | See silver.telemetry_record_outcomes. |
 | `records` | BIGINT | long | bigint | no | Bronze records. |
@@ -226,13 +304,36 @@ Operational data quality: Silver outcomes per ingestion day, topic, outcome and 
 | `distinct_robots` | BIGINT | long | bigint | no | Distinct non-NULL robot_id. |
 | `silver_build_id` | STRING | string | varchar | no | Silver build the row was computed from. |
 
+## `gold.pipeline_daily_rates`
+
+Daily quality rates with explicit denominators. UNRESOLVED records are counted but excluded from the denominator, since they have not been classified yet.
+
+* Written by: dbt
+* Identity: `(ingest_date, source_topic)`
+* Partitioning: `months(ingest_date)`
+* Sort order: none
+
+| Column | Spark | Iceberg | Trino | Null | Description |
+|---|---|---|---|---|---|
+| `ingest_date` | DATE | date | date | no | UTC date of bronze_ingested_at. |
+| `source_topic` | STRING | string | varchar | no | Kafka topic. |
+| `bronze_records` | BIGINT | long | bigint | no | All Bronze records of the day. |
+| `classified` | BIGINT | long | bigint | no | ACCEPTED + DUPLICATE + REJECTED. |
+| `accepted` | BIGINT | long | bigint | no | ACCEPTED records. |
+| `duplicates` | BIGINT | long | bigint | no | DUPLICATE records. |
+| `rejected` | BIGINT | long | bigint | no | Permanently REJECTED records. |
+| `unresolved` | BIGINT | long | bigint | no | UNRESOLVED records (not in the denominator). |
+| `invalid_rate` | DOUBLE | double | double | yes | rejected / classified; NULL when classified = 0. |
+| `duplicate_rate` | DOUBLE | double | double | yes | duplicates / classified; NULL when classified = 0. |
+| `silver_build_id` | STRING | string | varchar | no | Silver build the row was computed from. |
+
 ## `gold.robot_state_observations`
 
 Training-candidate robot state observations with stable ids, provenance and a leakage-safe split. Not training-ready: see the readiness requirements in the spec.
 
-* Status: specified, not implemented yet
+* Written by: spark
 * Identity: `(release_id, observation_id)`
-* Partitioning: `release_id, split`
+* Partitioning: `release_id`
 * Sort order: `robot_id, boot_number, sequence_number`
 
 | Column | Spark | Iceberg | Trino | Null | Description |
@@ -253,11 +354,12 @@ Training-candidate robot state observations with stable ids, provenance and a le
 | `heading_rad` | DOUBLE | double | double | yes | Canonical heading. |
 | `motor_temp_c` | DOUBLE | double | double | yes | Motor temperature. |
 | `lidar_ok` | BOOLEAN | boolean | boolean | yes | Lidar self-check. |
-| `dt_prev_s` | DOUBLE | double | double | yes | Seconds since the previous sequence number of the same episode (observed_at); NULL at an episode start or after a sequence gap. |
+| `dt_prev_s` | DOUBLE | double | double | yes | Seconds since the previous sequence number of the same episode; NULL with a flag when there is no valid previous step. |
 | `vx_mps` | DOUBLE | double | double | yes | Finite-difference x velocity when dt_prev_s > 0. |
 | `vy_mps` | DOUBLE | double | double | yes | Finite-difference y velocity when dt_prev_s > 0. |
 | `split` | STRING | string | varchar | no | train, validation or test, by hash(episode_id, split_seed): no episode spans splits. |
-| `quality_flags` | ARRAY&lt;STRING&gt; | list&lt;string&gt; | array(varchar) | no | Silver flags plus Gold flags. |
+| `split_robot` | STRING | string | varchar | no | Stricter split by hash(robot_id, split_seed): no robot spans splits. |
+| `quality_flags` | ARRAY&lt;STRING&gt; | list&lt;string&gt; | array(varchar) | no | Silver flags plus Gold flags (e.g. NO_PREVIOUS_STEP, SEQUENCE_GAP, NON_POSITIVE_DT). |
 | `source_topic` | STRING | string | varchar | no | Kafka topic name. |
 | `kafka_topic_id` | STRING | string | varchar | no | Kafka topic id (incarnation). Changes when a topic is deleted and recreated. |
 | `kafka_partition` | INT | int | integer | no | Kafka partition. |
@@ -268,7 +370,7 @@ Training-candidate robot state observations with stable ids, provenance and a le
 
 One row per immutable dataset release: inputs, selection, split and content hash.
 
-* Status: specified, not implemented yet
+* Written by: spark
 * Identity: `(release_id)`
 * Partitioning: unpartitioned
 * Sort order: none
@@ -279,12 +381,60 @@ One row per immutable dataset release: inputs, selection, split and content hash
 | `created_at` | TIMESTAMP | timestamptz | timestamp(6) with time zone | no | Release time. |
 | `silver_build_id` | STRING | string | varchar | no | Silver build used. |
 | `silver_events_snapshot_id` | BIGINT | long | bigint | no | Iceberg snapshot read. |
+| `silver_outcomes_snapshot_id` | BIGINT | long | bigint | no | Outcomes snapshot of that build. |
+| `bronze_snapshot_id` | BIGINT | long | bigint | no | Bronze snapshot of that build. |
+| `observations_snapshot_id` | BIGINT | long | bigint | no | gold.robot_state_observations snapshot holding this release (tagged). |
 | `transform_version` | STRING | string | varchar | no | Silver rule set version. |
-| `split_seed` | STRING | string | varchar | no | Seed of the episode hash split. |
+| `feature_schema_version` | STRING | string | varchar | no | Version of the feature definitions. |
+| `split_seed` | STRING | string | varchar | no | Seed of the episode and robot hash splits. |
 | `selection` | STRING | string | varchar | no | JSON of filters and exclusions applied. |
 | `rows_train` | BIGINT | long | bigint | no | Rows in train. |
 | `rows_validation` | BIGINT | long | bigint | no | Rows in validation. |
 | `rows_test` | BIGINT | long | bigint | no | Rows in test. |
+| `rows_total` | BIGINT | long | bigint | no | All rows of the release. |
 | `content_sha256` | STRING | string | varchar | no | Hash over the ordered rows: equal hashes mean an identical dataset. |
 | `readiness` | STRING | string | varchar | no | CANDIDATE until the learning-readiness checks pass; SQL validation alone never promotes a release. |
 | `known_limitations` | STRING | string | varchar | no | Free text, required. |
+
+## `ops.reconciliation_runs`
+
+One row per check of a reconciliation run (Kafka, Bronze, Silver, Gold, releases).
+
+* Written by: spark
+* Identity: `(run_id, check_name)`
+* Partitioning: unpartitioned
+* Sort order: none
+
+| Column | Spark | Iceberg | Trino | Null | Description |
+|---|---|---|---|---|---|
+| `run_id` | STRING | string | varchar | no | Reconciliation run. |
+| `check_name` | STRING | string | varchar | no | Invariant checked. |
+| `passed` | BOOLEAN | boolean | boolean | no | Whether the invariant held. |
+| `expected` | STRING | string | varchar | yes | Expected value (JSON). |
+| `actual` | STRING | string | varchar | yes | Observed value (JSON). |
+| `detail` | STRING | string | varchar | yes | Short explanation or sample of offending keys. |
+| `silver_build_id` | STRING | string | varchar | yes | Silver build checked. |
+| `checked_at` | TIMESTAMP | timestamptz | timestamp(6) with time zone | no | When the check ran. |
+
+## `ops.table_storage`
+
+One row per table and maintenance run: files, bytes, snapshots, tags and orphans.
+
+* Written by: spark
+* Identity: `(run_id, table_name)`
+* Partitioning: unpartitioned
+* Sort order: none
+
+| Column | Spark | Iceberg | Trino | Null | Description |
+|---|---|---|---|---|---|
+| `run_id` | STRING | string | varchar | no | Maintenance run. |
+| `table_name` | STRING | string | varchar | no | namespace.table. |
+| `snapshots` | BIGINT | long | bigint | no | Snapshots kept after expiry. |
+| `tags` | BIGINT | long | bigint | no | Tags (release pins) on the table. |
+| `data_files` | BIGINT | long | bigint | no | Live data files. |
+| `data_bytes` | BIGINT | long | bigint | no | Bytes in live data files. |
+| `records` | BIGINT | long | bigint | no | Rows in the current snapshot. |
+| `small_files` | BIGINT | long | bigint | no | Live data files under 8 MiB. |
+| `orphan_files` | BIGINT | long | bigint | no | Files in storage that no snapshot references. |
+| `expired_snapshots` | BIGINT | long | bigint | no | Snapshots this run expired. |
+| `measured_at` | TIMESTAMP | timestamptz | timestamp(6) with time zone | no | When the table was measured. |

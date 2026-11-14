@@ -149,5 +149,8 @@ def test_job_modules_import_without_pyspark():
     import fleetforge.lakehouse.jobs.bronze_ingest as b
     import fleetforge.lakehouse.jobs.silver_build as s
 
-    assert b.SOURCES[T].contiguous and not b.SOURCES[FIRMWARE_TOPIC].contiguous
+    known = b.sources(LakehouseSettings())
+    assert known[T].contiguous and not known[FIRMWARE_TOPIC].contiguous
+    custom = b.sources(LakehouseSettings(telemetry_topic="gate.telemetry"))
+    assert custom["gate.telemetry"].avro and T not in custom
     assert s.ARRIVAL == ("ingested_at", "kafka_topic_id", "kafka_partition", "kafka_offset")

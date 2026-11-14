@@ -1,0 +1,26 @@
+version: 2
+
+sources:
+  - name: silver
+    schema: silver
+    description: Written by the Spark Silver job; Gold reads it at the snapshots of one build.
+    tables:
+      - name: build_log
+        description: One row per published Silver build (the incremental checkpoint).
+        loaded_at_field: committed_at
+        freshness:
+          warn_after: {count: 30, period: minute}
+          error_after: {count: 2, period: hour}
+      - name: telemetry_events
+      - name: telemetry_record_outcomes
+      - name: robot_registry
+  - name: bronze
+    schema: bronze
+    tables:
+      - name: kafka_records
+  - name: gold_releases
+    schema: gold
+    description: Dataset releases written by the Spark release job.
+    tables:
+      - name: robot_state_observations
+      - name: training_dataset_releases

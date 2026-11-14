@@ -58,9 +58,7 @@ from fleetforge.lakehouse.jobs.common import (
     single_writer_lease,
     snapshots,
 )
-from fleetforge.lakehouse.reference import FIRMWARE_TOPIC, ROBOT_EVENTS_TOPIC
 from fleetforge.lakehouse.settings import LakehouseSettings
-from fleetforge.lakehouse.silver import TELEMETRY_TOPIC
 from fleetforge.lakehouse.tables import BRONZE_KAFKA_RECORDS, BRONZE_REGISTRY_SCHEMAS
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -76,12 +74,13 @@ class SourceTopic:
     avro: bool  # Confluent-framed Avro values whose schemas are archived
 
 
-SOURCES = {
-    TELEMETRY_TOPIC: SourceTopic(contiguous=True, avro=True),  # see processor.py, ADR 0011
-    ROBOT_EVENTS_TOPIC: SourceTopic(contiguous=False, avro=False),  # Kafka Connect producer
-    "fleet.mission-events.v1": SourceTopic(contiguous=False, avro=False),
-    FIRMWARE_TOPIC: SourceTopic(contiguous=False, avro=False),  # compacted
-}
+def sources(lake: LakehouseSettings) -> dict[str, SourceTopic]:
+    return {
+        lake.telemetry_topic: SourceTopic(contiguous=True, avro=True),  # processor.py, ADR 0011
+        lake.robot_events_topic: SourceTopic(contiguous=False, avro=False),  # Kafka Connect
+        lake.mission_events_topic: SourceTopic(contiguous=False, avro=False),
+        lake.firmware_topic: SourceTopic(contiguous=False, avro=False),  # compacted
+    }
 
 
 # --------------------------------------------------------------------------- Kafka metadata
@@ -222,12 +221,10 @@ def archive_schemas(
     Raises RegistryUnavailable (retry later) rather than guessing."""
     from pyspark.sql import functions as F
 
-    # _registry_down is Milestone 2's transport-vs-answer classifier. Reused, not
-    # copied, so both milestones classify registry failures identically.
-    from fleetforge.kafka.codec import RegistryUnavailable, _registry_down
-    from fleetforge.kafka.schemas import registry_client, subject_for
+    from fleetforge.kafka.codec import RegistryUnavailable, schema_not_found
+    from fleetforge.kafka.schemas import registry_client
 
-    avro_topics = topics or [t for t, s in SOURCES.items() if s.avro]
+    avro_topics = topics or [t for t, s in sources(LakehouseSettings()).items() if s.avro]
     wanted = (
         spark.table(fq(BRONZE_KAFKA_RECORDS))
         .where(F.col("source_topic").isin(avro_topics) & F.col("value_schema_id").isNotNull())
@@ -254,8 +251,8 @@ def archive_schemas(
         try:
             reg = client.get_schema(sid)
         except Exception as exc:
-            subject = subject_for(topic)
-            if _registry_down(exc) or subject not in client.get_subjects(subject_prefix=subject):
+            # Only an explicit 404 is recorded, and only as "not found yet" (ADR 0016).
+            if not schema_not_found(exc):
                 raise RegistryUnavailable(f"schema {sid}: {exc}") from exc
             if sid in known_absent:
                 continue  # still absent; already recorded
@@ -296,7 +293,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     m2 = get_settings()
     run_id = f"bronze-{uuid.uuid4()}"
     ingested_at = datetime.now(UTC)  # constant for the whole run (arrival order)
-    topics = args.topic or list(SOURCES)
+    known = sources(lake)
+    topics = args.topic or list(known)
+    if unknown := set(topics) - set(known):
+        raise SystemExit(f"unknown topics {sorted(unknown)}; configured: {sorted(known)}")
     with single_writer_lease(lake.catalog_dsn, LEASE):
         spark = session("fleetforge-bronze-ingest", lake)
         ensure_tables(spark, [BRONZE_KAFKA_RECORDS, BRONZE_REGISTRY_SCHEMAS])
@@ -305,8 +305,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         plans: list[TopicPlan] = []
         for topic in topics:
             tid, wms = kafka_metadata(m2.kafka_bootstrap, topic)
+            start = None if args.replay else previous.get(topic)  # replay: from the earliest offset
             plans.append(plan_topic(
-                topic, tid, previous.get(topic), wms,
+                topic, tid, start, wms,
                 max_records_per_partition=args.max_records_per_partition,
                 accept_gaps=args.accept_gaps,
                 accept_new_incarnation=topic in (args.accept_new_incarnation or []),
@@ -322,7 +323,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             observed = observed_ranges(rows)
             for p in plans:
                 mine = {k: v for k, v in observed.items() if k[0] == p.topic}
-                verify_batch(p.ranges, mine, contiguous=SOURCES[p.topic].contiguous)
+                verify_batch(p.ranges, mine, contiguous=known[p.topic].contiguous)
             for p in plans:
                 if p.ranges and kafka_metadata(m2.kafka_bootstrap, p.topic)[0] != p.topic_id:
                     raise BronzePositionError(f"{p.topic} was recreated during the read")
@@ -337,13 +338,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     ap = argparse.ArgumentParser(prog="fleet-lake-bronze")
-    ap.add_argument("--topic", action="append", choices=sorted(SOURCES))
+    ap.add_argument("--topic", action="append", help="default: every configured source topic")
     ap.add_argument("--max-records-per-partition", type=int)
     ap.add_argument(
         "--accept-gaps",
         action="store_true",
         help="record retention gaps and continue (audited in the snapshot)",
     )
+    ap.add_argument("--replay", action="store_true",
+                    help="re-read from the earliest offset, skipping rows Bronze has")  # fmt: skip
     ap.add_argument("--accept-new-incarnation", action="append", metavar="TOPIC",
                     help="treat a recreated topic as new (audited in the snapshot)")  # fmt: skip
     report = run(ap.parse_args(argv))

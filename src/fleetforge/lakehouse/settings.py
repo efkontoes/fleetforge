@@ -31,6 +31,11 @@ class LakehouseSettings(BaseSettings):
         "-XX:ParallelGCThreads=2 -XX:ConcGCThreads=1 -XX:CICompilerCount=2"
     )
     shuffle_partitions: int = 4
+    # Source topics; a validation run can point the jobs at its own topics.
+    telemetry_topic: str = "telemetry.raw.v1"
+    robot_events_topic: str = "fleet.robot-events.v1"
+    firmware_topic: str = "fleetforge.fleet.firmware_versions"
+    mission_events_topic: str = "fleet.mission-events.v1"
     jars_dir: str = ""  # baked jars (image); empty -> resolve SPARK_PACKAGES with Ivy
 
     @property

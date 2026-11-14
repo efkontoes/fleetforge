@@ -1,0 +1,26 @@
+name: fleetforge
+version: "1.0.0"
+config-version: 2
+profile: fleetforge
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+clean-targets: ["target", "logs"]
+
+vars:
+  silver_build_id: ""     # empty: the newest published Silver build
+  telemetry_topic: "telemetry.raw.v1"
+  correction_window_days: 14
+  reopen: false           # true: recompute final days too
+  reopen_from: ""         # or reopen only final days in [reopen_from, reopen_to]
+  reopen_to: ""
+
+models:
+  fleetforge:
+    gold:
+      +schema: gold
+      +contract: {enforced: true}
+
+flags:
+  send_anonymous_usage_stats: false

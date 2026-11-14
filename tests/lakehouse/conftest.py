@@ -43,7 +43,8 @@ def lake_settings() -> LakehouseSettings:
 def spark(lake_settings):
     from fleetforge.lakehouse.jobs.common import session
 
-    s = session("fleetforge-lakehouse-tests", lake_settings)
+    # spark.testing lets Iceberg look for orphans younger than 24 h (never set in jobs).
+    s = session("fleetforge-lakehouse-tests", lake_settings, {"spark.testing": "true"})
     yield s
     s.stop()
 

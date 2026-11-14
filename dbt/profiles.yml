@@ -1,0 +1,23 @@
+fleetforge:
+  target: "{{ env_var('DBT_TARGET', 'lake') }}"
+  outputs:
+    lake:
+      type: trino
+      method: none
+      user: dbt
+      host: "{{ env_var('TRINO_HOST', 'trino') }}"
+      port: "{{ env_var('TRINO_PORT', '8080') | as_number }}"
+      http_scheme: http
+      database: lake
+      schema: gold
+      threads: 2
+    test:
+      type: trino
+      method: none
+      user: dbt
+      host: "{{ env_var('TRINO_HOST', 'trino') }}"
+      port: "{{ env_var('TRINO_PORT', '8080') | as_number }}"
+      http_scheme: http
+      database: lake_test
+      schema: gold
+      threads: 2

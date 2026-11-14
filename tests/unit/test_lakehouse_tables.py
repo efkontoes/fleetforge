@@ -43,3 +43,16 @@ def test_ddl_declares_constraints_partitioning_and_sort_order():
 def test_committed_schema_document_is_generated_from_the_specs():
     doc = (ROOT / "docs/architecture/milestone-3-tables.md").read_text()
     assert doc == render_markdown(), "run: python scripts/render_lakehouse_tables.py"
+
+
+def test_dbt_contracts_equal_the_table_specs():
+    import yaml
+
+    from fleetforge.lakehouse.tables import ALL_TABLES
+
+    models = yaml.safe_load((ROOT / "dbt/models/gold/gold.yml").read_text())["models"]
+    contracts = {m["name"]: [(c["name"], c["data_type"]) for c in m["columns"]] for m in models}
+    owned = {t.name: t for t in ALL_TABLES if t.writer == "dbt"}
+    assert contracts.keys() == owned.keys()
+    for name, table in owned.items():
+        assert contracts[name] == [(c.name, type_names(c.type)[1]) for c in table.columns], name
