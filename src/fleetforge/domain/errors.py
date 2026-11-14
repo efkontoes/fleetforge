@@ -11,6 +11,11 @@ RECOVERABLE      the infrastructure is temporarily wrong (DB down, timeout, brok
                     Lag grows; that is the backpressure signal.
 ORDERING         the record is valid but not newer than what we hold (stale), or is
                  a redelivery (duplicate). -> recorded / counted, never retried.
+UNRESOLVED       the record could not be judged: the schema registry kept answering
+                 404 for its schema id beyond the hold window. Not proof of bad data
+                 (a reloading registry answers 404 for ids it holds).
+                 -> parked (status PARKED) with bytes and coordinates, offsets advance,
+                    alert; replay once the id resolves, or an operator discards it.
 POSITION         the offset ledger and the Kafka log disagree.
                  -> stop the consumer (OffsetLedgerError); see `fleet-replay ledger-reset`.
 """
@@ -28,6 +33,7 @@ class ErrorCategory(StrEnum):
     PERMANENT_DATA = "PERMANENT_DATA"
     RECOVERABLE = "RECOVERABLE"
     ORDERING = "ORDERING"
+    UNRESOLVED = "UNRESOLVED"
 
 
 # reason -> (category, retry_eligible)
@@ -46,6 +52,7 @@ REASONS: dict[ReasonCode, tuple[ErrorCategory, bool]] = {
     ReasonCode.DB_CONSTRAINT_VIOLATION: (ErrorCategory.PERMANENT_DATA, False),
     ReasonCode.SEQUENCE_CONFLICT: (ErrorCategory.PERMANENT_DATA, False),
     ReasonCode.STALE_SEQUENCE: (ErrorCategory.ORDERING, False),
+    ReasonCode.UNRESOLVED_SCHEMA_ID: (ErrorCategory.UNRESOLVED, True),
 }
 
 
@@ -58,7 +65,9 @@ def retry_eligible(code: ReasonCode) -> bool:
 
 
 def initial_status(code: ReasonCode) -> str:
-    return "RECORDED" if category_of(code) is ErrorCategory.ORDERING else "QUARANTINED"
+    return {ErrorCategory.ORDERING: "RECORDED", ErrorCategory.UNRESOLVED: "PARKED"}.get(
+        category_of(code), "QUARANTINED"
+    )
 
 
 # Raised by SQLAlchemy-wrapped calls AND by raw psycopg cursors (set-based SQL runs on

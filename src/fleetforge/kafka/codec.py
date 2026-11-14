@@ -6,11 +6,12 @@ from __future__ import annotations
 
 import io
 import json
+import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
 import fastavro
-import httpx
 from confluent_kafka.schema_registry import SchemaRegistryClient
 from confluent_kafka.schema_registry.avro import AvroSerializer
 from confluent_kafka.schema_registry.error import SchemaRegistryError
@@ -20,28 +21,43 @@ from fleetforge.kafka.schemas import schema_str
 
 
 class DecodeError(Exception):
-    """The bytes are not a valid telemetry record. Permanent: quarantine."""
+    """The bytes are verifiably not a valid telemetry record: no Confluent framing, a
+    body that does not decode with the schema the registry returned, or a schema of
+    another type. Permanent: quarantine."""
 
 
 class RegistryUnavailable(Exception):
-    """The schema registry could not be asked. Says nothing about the record.
-    Recoverable: retry the batch, never quarantine (that would turn an outage into
-    'bad data' permanently)."""
+    """The schema registry could not answer, or answered 404 within the hold window.
+    Says nothing about the record. Recoverable: retry the batch, never quarantine
+    (that would turn an outage into 'bad data' permanently)."""
+
+
+class SchemaUnresolved(Exception):
+    """The registry kept answering 404 for a schema id for longer than the hold window.
+
+    Not proof that the record is invalid: a reloading registry answers 404 for ids it
+    holds. The record is parked (kept with its bytes and Kafka coordinates, never
+    marked malformed, replayable) and an operator decides."""
+
+    def __init__(self, schema_id: int, unresolved_for_s: float, detail: str):
+        super().__init__(f"schema id {schema_id} unresolved for {unresolved_for_s:.0f}s: {detail}")
+        self.schema_id = schema_id
+        self.unresolved_for_s = unresolved_for_s
+
+
+def schema_not_found(exc: BaseException) -> bool:
+    """True only for the registry's explicit answer that a schema id does not exist.
+
+    Every other failure is an outage, whatever its class or HTTP library. The previous
+    allowlist of transport classes (httpx, OSError) missed httpx2, which
+    confluent-kafka's client uses when installed, so a connection reset during a
+    registry restart was quarantined as bad data."""
+    return isinstance(exc, SchemaRegistryError) and exc.http_status_code == 404
 
 
 def _registry_down(exc: BaseException) -> bool:
-    """True for transport errors and any registry answer except 404."""
-    seen = set()
-    while exc is not None and id(exc) not in seen:
-        seen.add(id(exc))
-        if isinstance(exc, SchemaRegistryError):
-            # 404 = unknown schema id: possibly the record's fault (see TelemetryDecoder).
-            # Everything else (5xx, auth, ...) is the registry's problem.
-            return exc.http_status_code != 404
-        if isinstance(exc, httpx.TransportError | OSError | TimeoutError):
-            return True
-        exc = exc.__cause__ or exc.__context__
-    return False
+    """Inverse of schema_not_found(): unknown failures default to "registry down"."""
+    return not schema_not_found(exc)
 
 
 class TelemetryEncoder:
@@ -60,33 +76,58 @@ class TelemetryEncoder:
 
 class TelemetryDecoder:
     """Confluent framing (magic byte + schema id) decoded with fastavro and the writer's
-    schema. A 404 is permanent only while the registry holds the topic's subject."""
+    schema. Found schemas are cached (ids are immutable).
 
-    def __init__(self, client: SchemaRegistryClient, topic: str):
+    An unknown schema id (404) is never treated as proof of bad data, because a
+    restarting registry answers 404 for ids it holds (measured; ADR 0016):
+      * within `unresolved_hold_s` of the first 404: RegistryUnavailable, so the batch
+        is retried and offsets are held, as in any outage;
+      * after it: SchemaUnresolved, so the record is parked, not quarantined;
+      * a parked id is asked again at most every `recheck_s`, and resolves normally
+        once the registry returns it."""
+
+    def __init__(self, client: SchemaRegistryClient, topic: str, *,
+                 unresolved_hold_s: float = 120.0, recheck_s: float = 5.0,
+                 clock: Callable[[], float] = time.monotonic):  # fmt: skip
         self._client = client
-        self._subject = f"{topic}-value"
+        self.topic = topic
+        self._hold_s = unresolved_hold_s
+        self._recheck_s = recheck_s
+        self._clock = clock
         self._writers: dict[int, Any] = {}
-
-    def _registry_is_authoritative(self) -> bool:
-        """Uncached check that the registry knows this topic's subject."""
-        try:
-            return self._subject in self._client.get_subjects(subject_prefix=self._subject)
-        except Exception:
-            return False
+        self._first_404: dict[int, float] = {}
+        self._parked_at: dict[int, float] = {}
 
     def _writer(self, schema_id: int) -> Any:
         parsed = self._writers.get(schema_id)
-        if parsed is None:
-            try:
-                registered = self._client.get_schema(schema_id)
-            except Exception as exc:
-                if _registry_down(exc) or not self._registry_is_authoritative():
-                    raise RegistryUnavailable(str(exc)) from exc
-                raise DecodeError(f"schema id {schema_id}: {type(exc).__name__}: {exc}") from exc
-            if registered.schema_type not in (None, "AVRO"):
-                raise DecodeError(f"schema id {schema_id} is {registered.schema_type}, not AVRO")
-            parsed = fastavro.parse_schema(json.loads(registered.schema_str))
-            self._writers[schema_id] = parsed
+        if parsed is not None:
+            return parsed
+        now = self._clock()
+        parked = self._parked_at.get(schema_id)
+        if parked is not None and now - parked < self._recheck_s:
+            raise SchemaUnresolved(schema_id, now - self._first_404[schema_id],
+                                   "registry answered 404 (re-checked recently)")  # fmt: skip
+        try:
+            registered = self._client.get_schema(schema_id)
+        except Exception as exc:
+            if not schema_not_found(exc):
+                raise RegistryUnavailable(
+                    f"schema id {schema_id}: {type(exc).__name__}: {exc}"
+                ) from exc
+            first = self._first_404.setdefault(schema_id, now)
+            if now - first < self._hold_s:
+                raise RegistryUnavailable(
+                    f"schema id {schema_id} not found for {now - first:.1f}s"
+                    f" (held up to {self._hold_s:.0f}s)"
+                ) from exc
+            self._parked_at[schema_id] = now
+            raise SchemaUnresolved(schema_id, now - first, str(exc)) from exc
+        self._first_404.pop(schema_id, None)
+        self._parked_at.pop(schema_id, None)
+        if registered.schema_type not in (None, "AVRO"):
+            raise DecodeError(f"schema id {schema_id} is {registered.schema_type}, not AVRO")
+        parsed = fastavro.parse_schema(json.loads(registered.schema_str))
+        self._writers[schema_id] = parsed
         return parsed
 
     def decode(self, value: bytes | None) -> dict[str, Any]:

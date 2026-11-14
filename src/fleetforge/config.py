@@ -20,7 +20,9 @@ class Settings(BaseSettings):
     http_telemetry_enabled: bool = True
 
     # ---- Kafka / schema registry (Milestone 2)
-    kafka_bootstrap: str = "localhost:29092"
+    # 127.0.0.1, not localhost: the port is published on IPv4 only, and where localhost
+    # resolves to ::1 first every new connection was refused once before falling back.
+    kafka_bootstrap: str = "127.0.0.1:29092"
     schema_registry_url: str = "http://localhost:8081/apis/ccompat/v7"
     telemetry_topic: str = "telemetry.raw.v1"
     mission_events_topic: str = "fleet.mission-events.v1"
@@ -32,6 +34,9 @@ class Settings(BaseSettings):
     projector_flush_interval_s: float = 0.2
     projector_metrics_port: int = 9101
     projector_max_retry_backoff_s: float = 10.0
+    # A schema id the registry answers 404 for is treated as an outage for this long
+    # (batch retried, offsets held), then the record is parked (ADR 0016).
+    projector_schema_unresolved_hold_s: float = 120.0
     consumer_rejoin_timeout_s: float = 120.0
 
 

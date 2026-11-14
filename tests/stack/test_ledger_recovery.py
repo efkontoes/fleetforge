@@ -19,7 +19,7 @@ from fleetforge.projector.main import Projector
 from fleetforge.projector.replay import Replayer
 from fleetforge.simulator.fleet import Telemetry
 
-from .conftest import BOOTSTRAP, high_watermarks
+from .conftest import BOOTSTRAP, admin_with_leaders, high_watermarks
 from .test_projector_recovery import check, fleet
 
 
@@ -121,7 +121,7 @@ def test_records_deleted_before_being_applied_are_refused(fresh_topic, stack_set
     assert candidates, "second fleet wrote too little to an already-applied partition"
     part = max(candidates, key=lambda p: hw[p] - applied[p][0])
     cut = applied[part][0] + 3  # retention removes 3 records we never applied
-    admin = AdminClient({"bootstrap.servers": BOOTSTRAP})
+    admin = admin_with_leaders(fresh_topic, [part])
     retry_transient(lambda: [f.result(30) for f in admin.delete_records(
         [TopicPartition(fresh_topic, part, cut)]).values()])  # fmt: skip
 
