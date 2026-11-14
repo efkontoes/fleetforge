@@ -38,6 +38,7 @@ class ReasonCode(StrEnum):
     DB_CONSTRAINT_VIOLATION = "DB_CONSTRAINT_VIOLATION"  # passed validation, DB refused
     STALE_SEQUENCE = "STALE_SEQUENCE"
     SEQUENCE_CONFLICT = "SEQUENCE_CONFLICT"
+    UNRESOLVED_SCHEMA_ID = "UNRESOLVED_SCHEMA_ID"  # registry kept answering 404: parked
 
 
 # When one payload has several problems, the primary reason is the most fundamental one.

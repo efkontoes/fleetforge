@@ -90,16 +90,25 @@ def test_schema_evolution_on_the_real_registry(fresh_topic, stack_settings, stac
     assert int.from_bytes(values[3][1:5], "big") == v2_id  # really written with v2
 
     group = f"evo-{uuid.uuid4().hex[:8]}"
-    p, stats = run_projector(stack_settings, stack_db, fresh_topic, group)
+    # A short hold keeps the test fast; the policy is the same as with the default.
+    fast = stack_settings.model_copy(update={"projector_schema_unresolved_hold_s": 2.0})
+    p, stats = run_projector(fast, stack_db, fresh_topic, group)
     assert stats.records == 5
     with stack_db.connect() as c:
         seq = c.execute(text("SELECT sequence_number FROM fleet.robot_latest_state"
                              " WHERE robot_id = :r"), {"r": robot}).scalar_one()  # fmt: skip
-        bad = c.execute(text("SELECT count(*) FROM fleet.telemetry_rejections WHERE"
-                             " source_topic = :t AND reason_code = 'MALFORMED_PAYLOAD'"),
-                        {"t": fresh_topic}).scalar_one()  # fmt: skip
+        rows = c.execute(text(
+            "SELECT reason_code, error_category, status, payload_bytes"
+            " FROM fleet.telemetry_rejections WHERE source_topic = :t ORDER BY source_offset"),
+            {"t": fresh_topic}).all()  # fmt: skip
     assert seq == 3  # v2 event applied by a v1-era consumer; later v1 event applied too
-    assert bad == 2  # both malformed records quarantined, partition kept moving
+    # ADR 0016: unframed bytes are verifiably malformed; a schema id the registry does
+    # not know is NOT proof of bad data, so that record is parked (kept, replayable).
+    assert [(r[0], r[1], r[2]) for r in rows] == [
+        ("UNRESOLVED_SCHEMA_ID", "UNRESOLVED", "PARKED"),
+        ("MALFORMED_PAYLOAD", "PERMANENT_DATA", "QUARANTINED"),
+    ]
+    assert bytes(rows[0][3]) == values[1]  # the parked record's exact bytes are retained
 
 
 def test_producer_survives_broker_interruption(fresh_topic, stack_settings, stack_db):
@@ -231,7 +240,9 @@ def test_sigkilled_producer_loses_only_unacknowledged_events(fresh_topic, stack_
     items = generate(SimConfig(seed=int(time.time()) % 10**6 + 7, robots=10, ticks=300,
                                faults=FAULTS))  # fmt: skip
     acks = tmp_path / "acks.txt"
-    child = mp.get_context("fork").Process(target=_paced_producer, args=(
+    # spawn, not fork: forking this multi-threaded process (librdkafka threads) left the
+    # child deadlocked on an inherited lock in CI run 43531660032, with no acks for 60 s.
+    child = mp.get_context("spawn").Process(target=_paced_producer, args=(
         items, fresh_topic, acks, {"linger.ms": 2000}))  # fmt: skip
     child.start()
     wait_until(lambda: acks.exists() and len(acks.read_text().split()) >= 1, 60, 0.02)

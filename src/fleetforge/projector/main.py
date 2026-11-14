@@ -66,7 +66,11 @@ class Projector:
         self.fault = fault_hook or (lambda stage: None)
         self.processor = processor or BatchProcessor(
             engine,
-            TelemetryDecoder(registry_client(settings.schema_registry_url), self.topic),
+            TelemetryDecoder(
+                registry_client(settings.schema_registry_url),
+                self.topic,
+                unresolved_hold_s=settings.projector_schema_unresolved_hold_s,
+            ),
             mode=settings.projector_mode,
             consumer_group=self.group,
             fault_hook=fault_hook,
@@ -227,6 +231,8 @@ class Projector:
             m.RECORDS.labels(r.outcome.value, reason).inc()
             if r.reason and category_of(r.reason) is ErrorCategory.PERMANENT_DATA:
                 m.QUARANTINED.labels(reason).inc()
+            if r.reason and category_of(r.reason) is ErrorCategory.UNRESOLVED:
+                m.PARKED.labels(reason).inc()
             if r.outcome is not Outcome.SKIPPED and r.record.timestamp_ms:
                 m.EVENT_TO_STATE.observe(max(0.0, now - r.record.timestamp_ms / 1000))
         pool = self.engine.pool

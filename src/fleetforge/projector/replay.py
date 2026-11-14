@@ -39,6 +39,7 @@ from sqlalchemy import Connection, Engine, text
 
 from fleetforge.config import Settings, get_settings
 from fleetforge.db.engine import make_engine
+from fleetforge.domain.telemetry import ReasonCode
 from fleetforge.kafka import offsets as kafka_offsets
 from fleetforge.kafka.codec import TelemetryDecoder, TelemetryEncoder
 from fleetforge.kafka.retry import retry_transient
@@ -63,7 +64,9 @@ class Replayer:
         self.engine = engine
         self.operator = operator or getpass.getuser()
         self.registry = registry or registry_client(settings.schema_registry_url)
-        self.decoder = TelemetryDecoder(self.registry, settings.telemetry_topic)
+        # No hold: an id that is still unresolved simply stays parked.
+        self.decoder = TelemetryDecoder(self.registry, settings.telemetry_topic,
+                                        unresolved_hold_s=0.0)  # fmt: skip
 
     # ------------------------------------------------------------------ selectors
 
@@ -72,7 +75,7 @@ class Replayer:
         return self._replay_rows(rows, "EVENT", {"event_id": event_id}, dry_run)
 
     def quarantined(self, reason: str | None, limit: int, dry_run: bool) -> dict[str, Any]:
-        where = "status = 'QUARANTINED' AND retry_eligible"
+        where = "status IN ('QUARANTINED', 'PARKED') AND retry_eligible"
         params: dict[str, Any] = {}
         if reason:
             where += " AND reason_code = :r"
@@ -214,6 +217,16 @@ class Replayer:
                         {"st": resolved_status, "ids": rejection_ids[key],
                          "res": json.dumps({"replay_id": str(replay_id),
                                             "outcome": r.outcome.value})})  # fmt: skip
+                elif key in rejection_ids and r.reason is not ReasonCode.UNRESOLVED_SCHEMA_ID:
+                    # A parked record that now has a verdict (e.g. a real data error,
+                    # recorded in its own row) is no longer parked.
+                    conn.execute(text(
+                        "UPDATE fleet.telemetry_rejections SET status = 'RESOLVED',"
+                        " updated_at = now(), resolution = CAST(:res AS jsonb)"
+                        " WHERE rejection_id = ANY(:ids) AND status = 'PARKED'"),
+                        {"ids": rejection_ids[key], "res": json.dumps({
+                            "replay_id": str(replay_id), "outcome": r.outcome.value,
+                            "reason": r.reason.value if r.reason else None})})  # fmt: skip
 
         proc = BatchProcessor(self.engine, self.decoder, mode=Mode.SET, consumer_group=None,
                               source="replay", before_commit=mark, dry_run=dry_run)  # fmt: skip

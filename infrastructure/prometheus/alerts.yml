@@ -45,6 +45,19 @@ groups:
         annotations:
           summary: Projector cannot write to PostgreSQL; Kafka is buffering
 
+      - alert: TelemetryRecordsParked
+        # ADR 0016: records whose schema id the registry kept answering 404 for. They
+        # are retained (not applied) until replayed or discarded by an operator.
+        expr: sum(fleetforge_quarantine_rows{status="PARKED"}) > 0
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: Telemetry is parked because its schema id cannot be resolved
+          description: >-
+            Check the registry for the schema ids in fleet.telemetry_rejections
+            (status PARKED), then run `fleet-replay quarantine --reason
+            UNRESOLVED_SCHEMA_ID`. See docs/operations/runbook.md, "Parked records".
+
       - alert: QuarantineRateHigh
         # >5% of records quarantined as permanent data errors (the simulator injects ~3-4%).
         expr: sum(rate(fleetforge_projector_quarantined_total[10m])) / sum(rate(fleetforge_projector_records_total[10m])) > 0.05

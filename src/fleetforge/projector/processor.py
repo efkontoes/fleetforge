@@ -42,7 +42,7 @@ from fleetforge.domain.telemetry import (
     identity_hints,
     payload_for_audit,
 )
-from fleetforge.kafka.codec import DecodeError, json_safe
+from fleetforge.kafka.codec import DecodeError, SchemaUnresolved, json_safe
 
 log = logging.getLogger(__name__)
 CONSUMER_VERSION = "telemetry-projector/0.2.0"
@@ -226,6 +226,16 @@ class BatchProcessor:
         p = _Prepared(rec)
         try:
             decoded = self.decoder.decode(rec.value)
+        except SchemaUnresolved as exc:
+            # Parked, not quarantined: the bytes and coordinates are kept in the same
+            # transaction that advances the ledger, so the record can be replayed.
+            p.payload = payload_for_audit(rec.value or b"")
+            p.rejection = _rejection(ReasonCode.UNRESOLVED_SCHEMA_ID, str(exc),
+                                     schema_id=exc.schema_id)  # fmt: skip
+            log.error("record parked: schema id unresolved",
+                      extra={"schema_id": exc.schema_id, "topic": rec.topic,
+                             "partition": rec.partition, "offset": rec.offset})  # fmt: skip
+            return p
         except DecodeError as exc:
             p.payload = payload_for_audit(rec.value or b"")
             p.event_id, p.robot_id = identity_hints(p.payload)

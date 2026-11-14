@@ -154,7 +154,8 @@ legacy HTTP path, and the database must refuse to move backwards regardless.
 |---|---|---|---|
 | Permanent data | malformed bytes, missing field, NaN, battery 150, unknown firmware, boot-number mismatch, sequence conflict, DB constraint violation | quarantine row (`QUARANTINED`) with topic/partition/offset, payload and bytes, category, reason, consumer version | advance |
 | Permanent but `retry_eligible` | unknown robot or boot (registered later) | quarantine; `fleet-replay quarantine` re-runs them | advance |
-| Recoverable infrastructure | DB down, timeout, **schema registry unavailable** (any transport error or non-404 answer; a 404 for a schema id is permanent only while the registry holds the topic's subject) | no quarantine; pause partitions, exponential backoff, retry the same batch (lag grows = backpressure) | hold |
+| Recoverable infrastructure | DB down, timeout, **schema registry unavailable**: every registry failure except an explicit 404, of any exception class, and a 404 within the hold window (ADR 0016) | no quarantine; pause partitions, exponential backoff, retry the same batch (lag grows = backpressure) | hold |
+| Unresolved (parked) | the registry kept answering 404 for a schema id beyond `projector_schema_unresolved_hold_s` (120 s); not proof of bad data | parked row (`PARKED`, category `UNRESOLVED`, retry-eligible) with coordinates and bytes; `TelemetryRecordsParked` pages; `fleet-replay quarantine --reason UNRESOLVED_SCHEMA_ID` once resolved | advance |
 | Ordering | stale, duplicate, redelivered (`SKIPPED`) | stale recorded (`RECORDED`); duplicates/skips counted | advance |
 | Unknown exception | bug | process exits; restart resumes from the ledger | hold |
 | Position | ledger and Kafka log disagree (topic recreated, retention gap) | process stops (`OffsetLedgerError`), operator decides via audited `ledger-reset` | hold |

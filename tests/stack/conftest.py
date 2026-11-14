@@ -25,7 +25,7 @@ from fleetforge.kafka.schemas import register, registry_client, subject_for
 
 ROOT = Path(__file__).resolve().parents[2]
 API = os.environ.get("FLEETFORGE_API_URL", "http://localhost:8000")
-BOOTSTRAP = os.environ.get("FLEETFORGE_KAFKA_BOOTSTRAP", "localhost:29092")
+BOOTSTRAP = os.environ.get("FLEETFORGE_KAFKA_BOOTSTRAP", "127.0.0.1:29092")
 REGISTRY = os.environ.get("FLEETFORGE_SCHEMA_REGISTRY_URL", "http://localhost:8081/apis/ccompat/v7")
 CONNECT = os.environ.get("FLEETFORGE_CONNECT_URL", "http://localhost:8083")
 
@@ -89,6 +89,26 @@ def fresh_topic() -> Iterator[str]:
     register(registry_client(REGISTRY), subject_for(name), 1)
     yield name
     admin.delete_topics([name])
+
+
+def admin_with_leaders(topic: str, partitions: list[int], timeout: float = 30) -> AdminClient:
+    """A fresh AdminClient whose own metadata already names a leader for `partitions`.
+
+    Leader-based admin requests (DeleteRecords) issued before a new client has that
+    metadata failed in CI with _NOENT "No leaders found" (run 43531660032). This is a
+    precondition, not a retry: it fails loudly if leaders never become known."""
+    admin = AdminClient({"bootstrap.servers": BOOTSTRAP})
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        md = admin.list_topics(topic, timeout=5).topics.get(topic)
+        if (
+            md is not None
+            and md.error is None
+            and all(p in md.partitions and md.partitions[p].leader >= 0 for p in partitions)
+        ):
+            return admin
+        time.sleep(0.2)
+    raise AssertionError(f"no leader known for {topic} partitions {partitions} after {timeout}s")
 
 
 def compose(*args: str) -> None:

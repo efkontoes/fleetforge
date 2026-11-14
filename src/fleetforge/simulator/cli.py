@@ -161,7 +161,7 @@ def main(argv: list[str] | None = None) -> int:
     k = sub.add_parser("publish", help="generate and publish telemetry to Kafka")
     _add_gen_args(k)
     k.add_argument("--api", default="http://localhost:8000", help="registration endpoint")
-    k.add_argument("--bootstrap", default="localhost:29092")
+    k.add_argument("--bootstrap", default="127.0.0.1:29092")
     k.add_argument("--registry", default="http://localhost:8081/apis/ccompat/v7")
     k.add_argument("--topic", default="telemetry.raw.v1")
     k.add_argument("--processes", type=int, default=1, help="producer OS processes")
