@@ -1,27 +1,11 @@
-"""Silver build: one pinned Bronze snapshot -> lake.silver.* (full deterministic rebuild).
+"""Silver build: full or incremental, from a pinned Bronze snapshot (ADR 0014, ADR 0017).
 
-    python -m fleetforge.lakehouse.jobs.silver_build
-
-Slice 1 rebuilds Silver completely from a pinned Bronze snapshot and replaces each
-Silver table in one atomic Iceberg commit (overwrite of all rows). That is the
-simplest way to make Silver a pure function of its inputs: the same Bronze snapshot,
-reference data and rules always give the same build id and the same rows, and a
-rebuild with an unchanged build id is skipped. Incremental processing is slice 2;
-its acceptance test is equality with this full rebuild.
-
-Execution plan:
-  driver:  pin the Bronze snapshot; load archived schemas; fail if any schema id in
-           Bronze is not archived (recoverable, never a quarantine); rebuild the
-           reference data from the firmware CDC and robot outbox rows (small).
-  row:     mapInPandas runs silver.prepare() on every telemetry row (narrow: no shuffle).
-  set:     window functions over event_id, the ordering slot, correction targets and
-           robot (each a shuffle), mirroring silver.build() step by step.
-  write:   reference tables, outcomes, then events. Iceberg has no multi-table
-           commit here, so readers pair tables by silver_build_id (see the spec).
+python -m fleetforge.lakehouse.jobs.silver_build [--full]
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -31,13 +15,13 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from fleetforge.lakehouse.bronze import CONFLUENT
+from fleetforge.lakehouse.incremental import reference_changes, schema_changes
 from fleetforge.lakehouse.jobs.common import (
     current_snapshot_id,
     ensure_tables,
     fq,
     session,
     single_writer_lease,
-    snapshot_summary,
 )
 from fleetforge.lakehouse.reference import (
     FIRMWARE_TOPIC,
@@ -67,9 +51,11 @@ from fleetforge.lakehouse.silver import (
 from fleetforge.lakehouse.tables import (
     BRONZE_KAFKA_RECORDS,
     BRONZE_REGISTRY_SCHEMAS,
+    SILVER_BUILD_LOG,
     SILVER_FIRMWARE_CONTRACTS,
     SILVER_ROBOT_REGISTRY,
     SILVER_TELEMETRY_EVENTS,
+    SILVER_TELEMETRY_PREPARED,
     SILVER_TELEMETRY_RECORD_OUTCOMES,
     Table,
 )
@@ -80,21 +66,20 @@ if TYPE_CHECKING:  # pragma: no cover
 
 log = logging.getLogger("fleetforge.lakehouse.silver")
 LEASE = "lake.silver"
-BUILD_ID_PROPERTY = "fleetforge.silver.build-id"
 ARRIVAL = ("ingested_at", "kafka_topic_id", "kafka_partition", "kafka_offset")
 ROW_STAGE_INPUT = ("source_topic", "kafka_topic_id", "kafka_partition", "kafka_offset",
                    "kafka_timestamp", "record_value", "value_framing", "value_schema_id",
                    "ingested_at")  # fmt: skip
-SILVER_TABLES = (SILVER_FIRMWARE_CONTRACTS, SILVER_ROBOT_REGISTRY,
-                 SILVER_TELEMETRY_RECORD_OUTCOMES, SILVER_TELEMETRY_EVENTS)  # fmt: skip
+SILVER_TABLES = (SILVER_FIRMWARE_CONTRACTS, SILVER_ROBOT_REGISTRY, SILVER_TELEMETRY_PREPARED,
+                 SILVER_TELEMETRY_RECORD_OUTCOMES, SILVER_TELEMETRY_EVENTS,
+                 SILVER_BUILD_LOG)  # fmt: skip
 
 
 # --------------------------------------------------------------------------- row stage
 
 
 def _py(value: Any, spark_type: str) -> Any:
-    """pandas cell -> plain Python value. Arrow hands nullable integers over as floats
-    with NaN, and timestamps as tz-naive values in the session time zone (UTC)."""
+    """Convert a pandas cell back to a plain value (Arrow sends NaN ints and naive UTC times)."""
     import pandas as pd
 
     if value is None or (isinstance(value, float) and math.isnan(value)) or value is pd.NaT:
@@ -133,8 +118,7 @@ def to_pandas(rows: list[dict[str, Any]]) -> pd.DataFrame:
 def row_stage(
     archive_rows: list[dict[str, Any]], reference: Reference
 ) -> Callable[[Iterator[pd.DataFrame]], Iterator[pd.DataFrame]]:
-    """mapInPandas function. The closure (archive, reference) is shipped to executors;
-    writer schemas are parsed once per task, not per row."""
+    """mapInPandas function; writer schemas are parsed once per task."""
 
     def fn(batches: Iterator[pd.DataFrame]) -> Iterator[pd.DataFrame]:
         writers = parse_writer_schemas(archive_rows)
@@ -152,7 +136,7 @@ def row_stage(
 
 
 def set_stage(p: DataFrame, bid: str) -> tuple[DataFrame, DataFrame]:
-    """Mirror of silver.build(), step for step (numbers match its docstring)."""
+    """Spark mirror of silver.build(), step for step."""
     from pyspark.sql import Window
     from pyspark.sql import functions as F
 
@@ -234,10 +218,11 @@ def set_stage(p: DataFrame, bid: str) -> tuple[DataFrame, DataFrame]:
         .withColumn("transform_version", F.lit(TRANSFORM_VERSION))
     )
 
-    def outcome(df: DataFrame, kind: str, reason, errors, canonical) -> DataFrame:
+    def outcome(df: DataFrame, kind, reason, errors, canonical) -> DataFrame:
+        kind = F.lit(kind) if isinstance(kind, str) else kind
         return df.select(
             "source_topic", "kafka_topic_id", "kafka_partition", "kafka_offset",
-            F.lit(kind).alias("outcome"), reason.alias("reason_code"), errors.alias("errors"),
+            kind.alias("outcome"), reason.alias("reason_code"), errors.alias("errors"),
             "event_id", "robot_id", canonical.alias("canonical_event_id"),
             F.col("value_schema_id").alias("writer_schema_id"),
             F.col("ingested_at").alias("bronze_ingested_at"),
@@ -249,8 +234,10 @@ def set_stage(p: DataFrame, bid: str) -> tuple[DataFrame, DataFrame]:
     seq_err = F.expr(template_sql(SEQUENCE_CONFLICT_TEMPLATE, {"held_event_id": "_holder"}))
     categories = F.create_map(*[F.lit(x) for k, (c, _) in REASON_TABLE.items() for x in (k, c)])
     retry = F.create_map(*[F.lit(x) for k, (_, r) in REASON_TABLE.items() for x in (k, r)])
+    unresolved = categories[F.col("reason_code")] == F.lit("UNRESOLVED")
+    invalid_kind = F.when(unresolved, "UNRESOLVED").otherwise("REJECTED")
     outcomes = (
-        outcome(invalid, "REJECTED", F.col("reason_code"), F.col("errors"), null)
+        outcome(invalid, invalid_kind, F.col("reason_code"), F.col("errors"), null)
         .unionByName(outcome(dups, "DUPLICATE", null, null, F.col("event_id")))
         .unionByName(outcome(eid_conflicts, "REJECTED",
                              F.lit(SilverReason.EVENT_ID_CONFLICT.value), eid_err, null))
@@ -291,74 +278,255 @@ def reference_rows(ref: Reference, bid: str) -> tuple[list[dict], list[dict]]:
     return fw, robots
 
 
+COORDS = ("kafka_topic_id", "kafka_partition", "kafka_offset")
+
+
 def write_replace(spark: SparkSession, df: DataFrame, table: Table, props: dict[str, str]) -> None:
     from pyspark.sql import functions as F
 
     writer = df.writeTo(fq(table))
     for k, v in props.items():
         writer = writer.option(f"snapshot-property.{k}", v)
-    writer.overwrite(F.lit(True))  # all rows replaced, one atomic snapshot
+    writer.overwrite(F.lit(True))  # all rows replaced in one atomic snapshot
+
+
+def merge_by_coords(spark: SparkSession, df: DataFrame, table: Table) -> None:
+    """Upsert rows keyed by Kafka coordinates; `df` must not read a table (4.1 cannot plan it)."""
+    view = f"_src_{table.name}"
+    df.createOrReplaceTempView(view)
+    on = " AND ".join(f"t.{c} = s.{c}" for c in COORDS)
+    spark.sql(f"MERGE INTO {fq(table)} t USING {view} s ON {on} "
+              "WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT *")  # fmt: skip
+
+
+class ConcurrentWrite(RuntimeError):
+    """Another writer committed to a Silver table while this build ran."""
+
+
+def replace_robots(spark: SparkSession, df: DataFrame, robots: list[str], base: int | None) -> None:
+    """Swap the events of `robots` in one row-level commit, refusing if someone wrote meanwhile."""
+    if current_snapshot_id(spark, SILVER_TELEMETRY_EVENTS) != base:
+        raise ConcurrentWrite("silver.telemetry_events changed during the build")
+    df.createOrReplaceTempView("_src_events")
+    listed = ", ".join("'" + r.replace("'", "''") + "'" for r in robots)
+    spark.sql(f"MERGE INTO {fq(SILVER_TELEMETRY_EVENTS)} t USING _src_events s "
+              "ON t.event_id = s.event_id "
+              "WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT * "
+              f"WHEN NOT MATCHED BY SOURCE AND t.robot_id IN ({listed}) THEN DELETE")  # fmt: skip
+
+
+def link_keys(df: DataFrame) -> DataFrame:
+    from pyspark.sql import functions as F
+
+    ids = df.select(F.col("event_id").alias("k"))
+    return ids.union(df.select(F.col("correction_of").alias("k"))).where("k IS NOT NULL")
+
+
+def scope_of(prepared: DataFrame, changed: DataFrame) -> tuple[list[str], DataFrame]:
+    """Spark mirror of incremental.closure(): robots to recompute and the rows they need."""
+    from pyspark.sql import functions as F
+
+    def robots_of(df: DataFrame) -> set[str]:
+        return {
+            r[0] for r in df.where("robot_id IS NOT NULL").select("robot_id").distinct().collect()
+        }
+
+    robots = robots_of(changed)
+    while True:
+        mine = prepared.where(F.col("robot_id").isin(sorted(robots)))
+        keys = link_keys(changed).union(link_keys(mine)).distinct()
+        linked = prepared.join(keys, prepared.event_id == keys.k, "left_semi").union(
+            prepared.join(keys, prepared.correction_of == keys.k, "left_semi"))  # fmt: skip
+        grown = robots | robots_of(linked)
+        if grown == robots:
+            break
+        robots = grown
+    robotless = prepared.where("robot_id IS NULL")
+    by_key = robotless.join(keys, robotless.event_id == keys.k, "left_semi")
+    by_coords = robotless.join(changed.select(*COORDS), list(COORDS), "left_semi")
+    scope = mine.unionByName(by_key).unionByName(by_coords.join(by_key, list(COORDS), "left_anti"))
+    return sorted(robots), scope
+
+
+def reference_at(bronze: DataFrame, topics: dict[str, str]) -> Reference:
+    from pyspark.sql import functions as F
+
+    def rows(topic: str) -> list[dict[str, Any]]:
+        return [r.asDict(recursive=True)
+                for r in bronze.where(F.col("source_topic") == topic).collect()]  # fmt: skip
+
+    return build_reference(rows(topics["firmware"]), rows(topics["robots"]))
+
+
+def archive_at(spark: SparkSession, snapshot: int | None) -> list[dict[str, Any]]:
+    if snapshot is None:
+        return []
+    sql = f"SELECT * FROM {fq(BRONZE_REGISTRY_SCHEMAS)} VERSION AS OF {int(snapshot)}"
+    return [r.asDict() for r in spark.sql(sql).collect()]
+
+
+def last_build(spark: SparkSession) -> dict[str, Any] | None:
+    rows = spark.sql(f"SELECT * FROM {fq(SILVER_BUILD_LOG)} ORDER BY committed_at DESC LIMIT 1")
+    found = rows.collect()
+    return found[0].asDict() if found else None
+
+
+def incremental_build_id(base: str, snap: int, ref_fp: str, archive_fp: str) -> str:
+    material = f"{base}|{snap}|{ref_fp}|{archive_fp}|{TRANSFORM_VERSION}"
+    return hashlib.sha256(material.encode()).hexdigest()[:24]
 
 
 def build_silver(
     spark: SparkSession,
+    *,
+    full: bool = False,
     bronze_snapshot: int | None = None,
     fault: Callable[[str], None] = lambda stage: None,
     telemetry_topic: str = TELEMETRY_TOPIC,
+    reference_topics: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     from pyspark.sql import functions as F
 
+    topics = reference_topics or {"firmware": FIRMWARE_TOPIC, "robots": ROBOT_EVENTS_TOPIC}
+    started = datetime.now(UTC)
     ensure_tables(spark, SILVER_TABLES)
     snap = bronze_snapshot or current_snapshot_id(spark, BRONZE_KAFKA_RECORDS)
     if snap is None:
         return {"status": "empty-bronze"}
     bronze = spark.sql(f"SELECT * FROM {fq(BRONZE_KAFKA_RECORDS)} VERSION AS OF {int(snap)}")
-    archive = [r.asDict() for r in spark.table(fq(BRONZE_REGISTRY_SCHEMAS)).collect()]
     telemetry = bronze.where(F.col("source_topic") == telemetry_topic)
-    ids = {r[0] for r in telemetry.where(F.col("value_framing") == CONFLUENT)
-           .select("value_schema_id").distinct().collect()}  # fmt: skip
-    missing = sorted(ids - {int(a["schema_id"]) for a in archive})
+    archive_snap = current_snapshot_id(spark, BRONZE_REGISTRY_SCHEMAS)
+    archive = archive_at(spark, archive_snap)
+    ref = reference_at(bronze, topics)
+    ref_fp, archive_fp = ref.fingerprint(), archive_fingerprint(archive)
+    base = None if full else last_build(spark)
+    if base is not None and base["transform_version"] != TRANSFORM_VERSION:
+        base = None  # new rules: everything is recomputed
+    inputs = (snap, ref_fp, archive_fp)
+    if base is not None and inputs == (base["bronze_snapshot_id"], base["reference_fingerprint"],
+                                       base["archive_fingerprint"]):  # fmt: skip
+        return {"status": "unchanged", "build_id": base["build_id"]}
+
+    if base is None:
+        mode, bid, reprepared = "FULL", build_id(int(snap), ref_fp, archive_fp), 0
+        source, new_rows = telemetry, telemetry
+    else:
+        mode = "INCREMENTAL"
+        bid = incremental_build_id(base["build_id"], snap, ref_fp, archive_fp)
+        old_bronze = spark.sql(f"SELECT * FROM {fq(BRONZE_KAFKA_RECORDS)} "
+                               f"VERSION AS OF {int(base['bronze_snapshot_id'])}")  # fmt: skip
+        robots = sorted(reference_changes(reference_at(old_bronze, topics), ref))
+        ids = sorted(schema_changes(archive_at(spark, base["archive_snapshot_id"]), archive))
+        prepared_table = spark.table(fq(SILVER_TELEMETRY_PREPARED))
+        affected = F.col("robot_id").isin(robots) | F.col("value_schema_id").isin(ids)
+        redo_keys = prepared_table.where(affected).select(*COORDS)
+        is_new = F.col("ingested_at") > F.lit(base["bronze_max_ingested_at"])
+        new_rows = telemetry.where(is_new)
+        redo = telemetry.where(~is_new).join(redo_keys, list(COORDS), "left_semi")
+        reprepared = redo.count()
+        source = new_rows.unionByName(redo)
+
+    framed = source.where(F.col("value_framing") == CONFLUENT).select("value_schema_id")
+    missing = sorted(
+        {r[0] for r in framed.distinct().collect()} - {int(a["schema_id"]) for a in archive}
+    )
     if missing:
         raise SchemaArchiveIncomplete(f"schema ids {missing} are not archived; run Bronze first")
 
-    def small(topic: str) -> list[dict[str, Any]]:
-        return [
-            r.asDict(recursive=True) for r in bronze.where(F.col("source_topic") == topic).collect()
-        ]
+    changed = source.select(*ROW_STAGE_INPUT).mapInPandas(row_stage(archive, ref), PREPARED_SCHEMA)
+    changed = changed.localCheckpoint()  # computed once, and later writes cannot change it
+    new_count = new_rows.count()
+    if mode == "FULL":
+        write_replace(
+            spark, conform(changed, SILVER_TELEMETRY_PREPARED), SILVER_TELEMETRY_PREPARED, {}
+        )
+        robots, scope = None, changed
+    else:
+        merge_by_coords(
+            spark, conform(changed, SILVER_TELEMETRY_PREPARED), SILVER_TELEMETRY_PREPARED
+        )
+        fault("after_prepared")
+        robots, scope = scope_of(spark.table(fq(SILVER_TELEMETRY_PREPARED)), changed)
+    scope = scope.localCheckpoint()
+    scope_rows = scope.count()
+    events, outcomes = set_stage(scope, bid)
+    events_base = current_snapshot_id(spark, SILVER_TELEMETRY_EVENTS)
+    if mode == "FULL":
+        write_replace(spark, outcomes, SILVER_TELEMETRY_RECORD_OUTCOMES, {})
+        fault("before_events")
+        write_replace(spark, events, SILVER_TELEMETRY_EVENTS, {})
+        scope_robots = scope.where("robot_id IS NOT NULL").select("robot_id").distinct().count()
+    else:
+        merge_by_coords(spark, outcomes, SILVER_TELEMETRY_RECORD_OUTCOMES)
+        fault("before_events")
+        if robots:
+            replace_robots(spark, events, robots, events_base)
+        scope_robots = len(robots)
+    fw, regs = reference_rows(ref, bid)
+    for rows, table in ((fw, SILVER_FIRMWARE_CONTRACTS), (regs, SILVER_ROBOT_REGISTRY)):
+        write_replace(spark, spark.createDataFrame(rows, table.spark_schema()), table, {})
+    fault("before_build_log")
+    max_ingested = telemetry.agg(F.max("ingested_at")).collect()[0][0]
+    entry = {
+        "build_id": bid, "mode": mode, "base_build_id": base["build_id"] if base else None,
+        "transform_version": TRANSFORM_VERSION, "bronze_snapshot_id": int(snap),
+        "bronze_max_ingested_at": max_ingested, "reference_fingerprint": ref_fp,
+        "archive_snapshot_id": archive_snap, "archive_fingerprint": archive_fp,
+        "prepared_snapshot_id": current_snapshot_id(spark, SILVER_TELEMETRY_PREPARED),
+        "outcomes_snapshot_id": current_snapshot_id(spark, SILVER_TELEMETRY_RECORD_OUTCOMES),
+        "events_snapshot_id": current_snapshot_id(spark, SILVER_TELEMETRY_EVENTS),
+        "new_bronze_rows": new_count, "reprepared_rows": reprepared,
+        "scope_robots": scope_robots, "scope_rows": scope_rows,
+        "telemetry_rows": telemetry.count(), "started_at": started,
+        "committed_at": datetime.now(UTC),
+    }  # fmt: skip
+    row = spark.createDataFrame([entry], SILVER_BUILD_LOG.spark_schema())
+    row.writeTo(fq(SILVER_BUILD_LOG)).append()
+    pin_base(spark, int(snap), archive_snap)
+    return {"status": "built", **{k: v for k, v in entry.items() if k != "started_at"}}
 
-    ref = build_reference(small(FIRMWARE_TOPIC), small(ROBOT_EVENTS_TOPIC))
-    bid = build_id(int(snap), ref.fingerprint(), archive_fingerprint(archive))
-    published = snapshot_summary(spark, SILVER_TELEMETRY_EVENTS,
-                                 current_snapshot_id(spark, SILVER_TELEMETRY_EVENTS))  # fmt: skip
-    if published.get(BUILD_ID_PROPERTY) == bid:
-        return {"status": "unchanged", "build_id": bid}
 
-    prepared = telemetry.select(*ROW_STAGE_INPUT).mapInPandas(
-        row_stage(archive, ref), PREPARED_SCHEMA
-    )
-    events, outcomes = set_stage(prepared, bid)
-    props = {BUILD_ID_PROPERTY: bid, "fleetforge.silver.bronze-snapshot-id": str(snap),
-             "fleetforge.silver.reference-fingerprint": ref.fingerprint(),
-             "fleetforge.silver.transform-version": TRANSFORM_VERSION,
-             "fleetforge.silver.schema-archive-fingerprint": archive_fingerprint(archive),
-             "fleetforge.silver.reference-anomalies": json.dumps(
-                 [[a.source.kafka_offset, a.message] for a in ref.anomalies])}  # fmt: skip
-    fw, robots = reference_rows(ref, bid)
-    for rows, table in ((fw, SILVER_FIRMWARE_CONTRACTS), (robots, SILVER_ROBOT_REGISTRY)):
-        write_replace(spark, spark.createDataFrame(rows, table.spark_schema()), table, props)
-    write_replace(spark, outcomes, SILVER_TELEMETRY_RECORD_OUTCOMES, props)
-    fault("before_events")  # tests: a crash between the two table commits
-    write_replace(spark, events, SILVER_TELEMETRY_EVENTS, props)  # last: publishes the build
-    return {"status": "built", "build_id": bid, "bronze_snapshot": snap,
-            "reference_anomalies": len(ref.anomalies),
-            "finished_at": datetime.now(UTC).isoformat()}  # fmt: skip
+def pin_base(spark: SparkSession, bronze_snap: int, archive_snap: int | None) -> None:
+    """Tag the inputs the next incremental build will read, so snapshot expiry keeps them."""
+    pins = [(BRONZE_KAFKA_RECORDS, bronze_snap), (BRONZE_REGISTRY_SCHEMAS, archive_snap)]
+    for table, snap in pins:
+        if snap is not None:
+            spark.sql(f"ALTER TABLE {fq(table)} CREATE OR REPLACE TAG `{BASE_TAG}` "
+                      f"AS OF VERSION {int(snap)}")  # fmt: skip
+
+
+BASE_TAG = "silver-base"
+COMMIT_CONFLICTS = ("CommitFailedException", "ValidationException", "ConcurrentWrite")
+
+
+def build_with_retry(spark: SparkSession, attempts: int = 3, **kwargs: Any) -> dict[str, Any]:
+    """Retry a build that lost an optimistic commit race; reruns are idempotent."""
+    for attempt in range(1, attempts + 1):
+        try:
+            return build_silver(spark, **kwargs)
+        except Exception as exc:
+            text = f"{type(exc).__name__}: {exc}"
+            if attempt == attempts or not any(c in text for c in COMMIT_CONFLICTS):
+                raise
+            log.warning("silver commit conflict, retrying", extra={"attempt": attempt})
+    raise AssertionError("unreachable")
 
 
 def main(argv: list[str] | None = None) -> int:
+    import argparse
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    ap = argparse.ArgumentParser(prog="fleet-lake-silver")
+    ap.add_argument("--full", action="store_true", help="rebuild everything from Bronze")
+    ap.add_argument("--bronze-snapshot", type=int, help="build from this Bronze snapshot")
+    args = ap.parse_args(argv)
     lake = LakehouseSettings()
     with single_writer_lease(lake.catalog_dsn, LEASE):
-        report = build_silver(session("fleetforge-silver-build", lake))
+        report = build_with_retry(
+            session("fleetforge-silver-build", lake), full=args.full,
+            bronze_snapshot=args.bronze_snapshot, telemetry_topic=lake.telemetry_topic,
+            reference_topics={"firmware": lake.firmware_topic, "robots": lake.robot_events_topic},
+        )  # fmt: skip
     print(json.dumps(report, default=str))
     return 0
 

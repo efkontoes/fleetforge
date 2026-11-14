@@ -139,10 +139,14 @@ def test_duplicates_are_counted_on_the_accepted_event():
 def test_retry_eligibility_follows_the_milestone_2_taxonomy():
     _, silver = _silver()
     retry = {o["reason_code"] for o in silver.outcomes if o["retry_eligible"]}
-    assert retry == {"UNKNOWN_ROBOT", "UNKNOWN_FIRMWARE"}
+    assert retry == {"UNKNOWN_ROBOT", "UNKNOWN_FIRMWARE", "UNRESOLVED_SCHEMA_ID"}
     rejected = [o for o in silver.outcomes if o["outcome"] == "REJECTED"]
     assert all(o["error_category"] == "PERMANENT_DATA" and o["errors"] for o in rejected)
     assert all(json.loads(o["errors"]) for o in rejected)  # valid, non-empty JSON
+    unresolved = [o for o in silver.outcomes if o["outcome"] == "UNRESOLVED"]
+    assert [(o["reason_code"], o["error_category"]) for o in unresolved] == [
+        ("UNRESOLVED_SCHEMA_ID", "UNRESOLVED")
+    ]  # an unknown schema id is never counted as bad data
 
 
 def test_result_does_not_depend_on_input_order():

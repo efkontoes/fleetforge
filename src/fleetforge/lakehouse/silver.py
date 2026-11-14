@@ -1,27 +1,7 @@
-"""Silver: validated, canonical telemetry, as a pure function of its inputs.
+"""Silver: validated canonical telemetry, a pure function of Bronze, reference data and rules.
 
-    Silver = F(Bronze snapshot, reference data, TRANSFORM_VERSION)
-
-F has two stages, kept separate because they scale differently on Spark:
-
-Row stage, ``prepare()``: one Bronze row in, one ``Prepared`` out. It decodes the
-Avro body with the archived writer schema, applies the Milestone 2 contract rules
-unchanged (``observation_from_record``, ``check_semantics``), resolves the firmware
-contract, converts units and repairs optional fields. On Spark this exact function
-runs inside ``mapInPandas``.
-
-Set stage, ``build()``: needs other rows. It resolves duplicates, event-id
-conflicts, sequence conflicts, corrections and out-of-order arrival. On Spark it is
-window functions (``jobs/silver_build.py``); this Python version is the reference
-implementation the Spark one is tested against.
-
-Determinism rules:
-  * no wall clock. The future-timestamp check compares observed_at with the
-    record's Bronze ``ingested_at``, which is stored, not with "now".
-  * "first" always means first in Bronze arrival order (``bronze.arrival_key``).
-  * ordering is (boot_number, sequence_number). observed_at is the robot's clock
-    and is never used to order events.
-  * every float conversion is exact or correctly rounded (reference.py).
+prepare() is the per-record row stage (also run by Spark in mapInPandas); build() is the
+set stage reference that the Spark window-function version must match. See ADR 0014.
 """
 
 from __future__ import annotations
@@ -52,12 +32,15 @@ from fleetforge.domain.telemetry import (
 from fleetforge.kafka.codec import json_safe
 from fleetforge.lakehouse.bronze import CONFLUENT, arrival_key
 from fleetforge.lakehouse.reference import BATTERY_MULTIPLIER, POSITION_DIVISOR, Reference
-from fleetforge.lakehouse.tables import SILVER_TELEMETRY_EVENTS, SILVER_TELEMETRY_RECORD_OUTCOMES
+from fleetforge.lakehouse.tables import (
+    SILVER_TELEMETRY_EVENTS,
+    SILVER_TELEMETRY_PREPARED,
+    SILVER_TELEMETRY_RECORD_OUTCOMES,
+)
 
-TRANSFORM_VERSION = "silver-telemetry/1"  # bump on ANY rule change below
+TRANSFORM_VERSION = "silver-telemetry/2"  # bump on any rule change
 TELEMETRY_TOPIC = "telemetry.raw.v1"
-# Milestone 2's default (fleetforge.config max_clock_skew_s). Fixed here, not read
-# from the environment: it is part of the rule set, so changing it is a new version.
+# Part of the rule set (Milestone 2's default), so not read from the environment.
 MAX_CLOCK_SKEW = timedelta(seconds=300)
 TAU = 2 * math.pi
 
@@ -66,11 +49,11 @@ class Outcome(StrEnum):
     ACCEPTED = "ACCEPTED"
     DUPLICATE = "DUPLICATE"
     REJECTED = "REJECTED"
+    UNRESOLVED = "UNRESOLVED"  # schema id not resolvable yet; never treated as bad data
 
 
 class SilverReason(StrEnum):
-    """Reasons that exist only at the set level of Silver (Milestone 2 cannot see
-    them: its latest-state table does not remember every event)."""
+    """Reasons that only exist in Silver's set stage."""
 
     EVENT_ID_CONFLICT = "EVENT_ID_CONFLICT"  # same event_id, different content
 
@@ -83,7 +66,7 @@ class Flag(StrEnum):
 
 
 def reason_category(code: str) -> tuple[str, bool]:
-    """(error_category, retry_eligible), from Milestone 2's taxonomy where it applies."""
+    """(error_category, retry_eligible) from Milestone 2's taxonomy."""
     if code == SilverReason.EVENT_ID_CONFLICT:
         return "PERMANENT_DATA", False
     category, retry = REASONS[ReasonCode(code)]
@@ -91,8 +74,7 @@ def reason_category(code: str) -> tuple[str, bool]:
 
 
 class SchemaArchiveIncomplete(RuntimeError):
-    """A schema id in Bronze is neither archived nor known to be absent. Recoverable:
-    archive it (Bronze job) and rerun. Never a quarantine: the record may be fine."""
+    """A Bronze schema id has not been archived yet; rerun after the Bronze job."""
 
 
 # --------------------------------------------------------------------------- row stage
@@ -140,8 +122,7 @@ class Prepared:
 
 
 def parse_writer_schemas(archive: Iterable[Mapping[str, Any]]) -> dict[int, Any]:
-    """bronze.registry_schemas rows -> {schema_id: parsed schema | None (NOT_FOUND)}.
-    A FOUND row wins over NOT_FOUND rows for the same id, whatever their order."""
+    """Archive rows to {schema_id: parsed schema, or None when not found}; FOUND wins."""
     out: dict[int, Any] = {}
     for r in archive:
         sid = int(r["schema_id"])
@@ -153,8 +134,7 @@ def parse_writer_schemas(archive: Iterable[Mapping[str, Any]]) -> dict[int, Any]
 
 
 def archive_fingerprint(archive: Iterable[Mapping[str, Any]]) -> str:
-    """Hash of the schema archive as Silver sees it. Part of the build id: an id that
-    turns from NOT_FOUND to FOUND must trigger a rebuild."""
+    """Hash of the archive as Silver sees it, so a newly found schema changes the build id."""
     effective = {}
     for r in archive:
         sid = int(r["schema_id"])
@@ -174,8 +154,7 @@ def _reject(row, code, errors, event_id=None, robot_id=None) -> Prepared:
 
 
 def wrap_angle(rad: float) -> float:
-    """Map any finite angle into [-pi, pi). Wrapping changes representation, not
-    direction; it does not assume a zero direction or rotation sense."""
+    """Map a finite angle into [-pi, pi) without assuming any zero direction."""
     w = math.fmod(rad + math.pi, TAU)
     if w < 0:
         w += TAU
@@ -188,10 +167,7 @@ def _micros(dt: datetime) -> int:
 
 
 def content_fingerprint(rec: Mapping[str, Any]) -> str:
-    """Hash of an event's business content, excluding delivery metadata (producer id
-    and time, writer schema): a retry re-encoded later, or by a newer schema
-    revision, is the same event. A v1 record (no heading) equals a v2 record with
-    heading NULL. Absent sensors equal all-NULL sensors."""
+    """Hash of business content only, so a re-encoded retry or v1/v2 copy is the same event."""
     sensors = rec.get("sensors") or {}
 
     def f(v: Any) -> str | None:
@@ -231,18 +207,10 @@ def prepare(row: Mapping[str, Any], writers: Mapping[int, Any], reference: Refer
     if sid not in writers:
         raise SchemaArchiveIncomplete(f"schema id {sid} is not in bronze.registry_schemas")
     writer = writers[sid]
-    if writer is None:
-        return _reject(
-            row,
-            ReasonCode.MALFORMED_PAYLOAD,
-            [
-                {
-                    "code": "MALFORMED_PAYLOAD",
-                    "field": None,
-                    "message": f"schema id {sid} does not exist in the registry",
-                }
-            ],
-        )
+    if writer is None:  # a 404 is not proof (ADR 0016); the archive keeps asking
+        err = {"code": "UNRESOLVED_SCHEMA_ID", "field": None,
+               "message": f"schema id {sid} not found in the registry yet"}  # fmt: skip
+        return _reject(row, ReasonCode.UNRESOLVED_SCHEMA_ID, [err])
     try:
         rec = fastavro.schemaless_reader(io.BytesIO(bytes(value)[5:]), writer, None)
         if not isinstance(rec, dict):
@@ -332,15 +300,12 @@ def _s(v: Any) -> str | None:
 
 
 def build_id(bronze_snapshot_id: int, reference_fingerprint: str, archive_fp: str = "") -> str:
-    """Equal inputs and rules -> equal id -> identical rows. A rebuild with the same
-    id is a no-op, and any input change (Bronze, reference data, schema archive,
-    rules) yields a new, distinguishable build."""
+    """Deterministic id of a full build's inputs and rules."""
     material = f"{bronze_snapshot_id}|{reference_fingerprint}|{archive_fp}|{TRANSFORM_VERSION}"
     return hashlib.sha256(material.encode()).hexdigest()[:24]
 
 
-# Set-level rejection details. One template per reason renders both the Python
-# string and the Spark SQL expression, so the two cannot drift apart.
+# One template per set-level reason renders both the Python string and the Spark SQL.
 SEQUENCE_CONFLICT_TEMPLATE = (
     '[{"code":"SEQUENCE_CONFLICT","field":null,"held_event_id":"{held_event_id}",'
     '"message":"another event already holds this (robot, boot_number, sequence_number)"}]'
@@ -359,9 +324,7 @@ def _fill(template: str, values: Mapping[str, Any]) -> str:
 
 
 def template_sql(template: str, columns: Mapping[str, str]) -> str:
-    """concat('<literal>', CAST(<expr> AS STRING), ...) rendering of a template, with
-    each {placeholder} replaced by a Spark SQL expression. Literal parts may contain
-    JSON braces but no single quote or backslash (checked), so need no escaping."""
+    """Render a template as a Spark concat() with each {placeholder} bound to an expression."""
     pattern = "(" + "|".join(re.escape("{" + k + "}") for k in columns) + ")"
     out = []
     for part in re.split(pattern, template):
@@ -404,22 +367,7 @@ class SilverBuild:
 
 
 def build(prepared: Iterable[Prepared], *, build_id: str) -> SilverBuild:
-    """Set stage. Input order does not matter: everything is decided in arrival order.
-
-    1. Rejected rows from the row stage keep their reason.
-    2. Valid rows grouped by event_id: the first is the representative; a later copy
-       with the same content fingerprint is a DUPLICATE, with different content an
-       EVENT_ID_CONFLICT (a producer bug; the first copy stays).
-    3. Representatives that are not corrections grouped by (robot_id, boot_number,
-       sequence_number): the first holds the slot, later ones are SEQUENCE_CONFLICT,
-       as in Milestone 2. Corrections share their target's slot by design and are
-       exempt.
-    4. Corrections: per target, the latest-arriving correction wins. The target (an
-       accepted event or a rejected record) and the losing corrections get
-       superseded_by = winner.
-    5. arrived_out_of_order: an accepted event of the same robot with a greater
-       ordering key arrived earlier.
-    """
+    """Set stage over prepared rows, decided in arrival order (steps 1-5 in ADR 0014)."""
     rows = sorted(prepared, key=lambda p: p.arrival)
     outcome: dict[tuple, dict[str, Any]] = {}
 
@@ -450,7 +398,9 @@ def build(prepared: Iterable[Prepared], *, build_id: str) -> SilverBuild:
     valid: list[Prepared] = []
     for p in rows:  # 1
         if p.event is None:
-            record(p, Outcome.REJECTED, p.reason, p.errors, None)
+            unresolved = reason_category(p.reason)[0] == "UNRESOLVED"
+            kind = Outcome.UNRESOLVED if unresolved else Outcome.REJECTED
+            record(p, kind, p.reason, p.errors, None)
         else:
             valid.append(p)
 
@@ -558,38 +508,14 @@ OUTCOME_COLUMNS = SILVER_TELEMETRY_RECORD_OUTCOMES.column_names
 
 # ------------------------------------------------------------------ row stage on Spark
 
-# The row stage's output as flat columns: what mapInPandas returns and the Spark set
-# stage consumes. Bronze lineage first, then the decision, then the canonical event.
-PREPARED_COLUMNS: tuple[tuple[str, str], ...] = (
-    ("source_topic", "STRING"),
-    ("kafka_topic_id", "STRING"),
-    ("kafka_partition", "INT"),
-    ("kafka_offset", "BIGINT"),
-    ("kafka_timestamp", "TIMESTAMP"),
-    ("ingested_at", "TIMESTAMP"),
-    ("value_schema_id", "BIGINT"),
-    ("status", "STRING"),  # VALID | INVALID
-    ("reason_code", "STRING"),
-    ("errors", "STRING"),
-    ("event_id", "STRING"),
-    ("robot_id", "STRING"),
-    *((f, t) for f, t in (
-        ("boot_id", "STRING"), ("boot_number", "BIGINT"), ("sequence_number", "BIGINT"),
-        ("observed_at", "TIMESTAMP"), ("robot_model", "STRING"), ("firmware_version", "STRING"),
-        ("battery_pct", "DOUBLE"), ("x_m", "DOUBLE"), ("y_m", "DOUBLE"),
-        ("heading_rad", "DOUBLE"), ("motor_temp_c", "DOUBLE"), ("lidar_ok", "BOOLEAN"),
-        ("source_battery_unit", "STRING"), ("source_position_unit", "STRING"),
-        ("quality_flags", "ARRAY<STRING>"), ("schema_version", "INT"),
-        ("writer_schema_id", "BIGINT"), ("producer_id", "STRING"), ("produced_at", "TIMESTAMP"),
-        ("correction_of", "STRING"), ("fingerprint", "STRING"),
-    )),
-)  # fmt: skip
+# Flat row-stage output: what mapInPandas returns and silver.telemetry_prepared stores.
+PREPARED_COLUMNS = tuple((c.name, c.type) for c in SILVER_TELEMETRY_PREPARED.columns)
 PREPARED_SCHEMA = ", ".join(f"{n} {t}" for n, t in PREPARED_COLUMNS)
 _CANONICAL_FIELDS = [n for n, _ in PREPARED_COLUMNS[12:]]
 
 
 def prepared_row(p: Prepared) -> dict[str, Any]:
-    """Flatten a Prepared for Spark. Keys are exactly PREPARED_COLUMNS."""
+    """Flatten a Prepared; keys are exactly PREPARED_COLUMNS."""
     r = p.row
     out: dict[str, Any] = {
         "source_topic": r["source_topic"],
@@ -610,3 +536,19 @@ def prepared_row(p: Prepared) -> dict[str, Any]:
         value = getattr(e, name) if e is not None else None
         out[name] = list(value) if name == "quality_flags" and value is not None else value
     return out
+
+
+_ROW_FIELDS = ("source_topic", "kafka_topic_id", "kafka_partition", "kafka_offset",
+               "kafka_timestamp", "ingested_at", "value_schema_id")  # fmt: skip
+
+
+def unflatten(flat: Mapping[str, Any]) -> Prepared:
+    """Inverse of prepared_row(), so stored prepared rows can feed build() again."""
+    row = {k: flat[k] for k in _ROW_FIELDS}
+    event = None
+    if flat["status"] == "VALID":
+        fields = {n: flat[n] for n in _CANONICAL_FIELDS}
+        fields["quality_flags"] = tuple(fields["quality_flags"] or ())
+        event = Canonical(event_id=flat["event_id"], robot_id=flat["robot_id"], **fields)
+    return Prepared(row, event, flat["reason_code"], flat["errors"], flat["event_id"],
+                    flat["robot_id"])  # fmt: skip

@@ -51,11 +51,12 @@ def spark_conf(s: LakehouseSettings) -> dict[str, str]:
     return conf
 
 
-def session(app_name: str, settings: LakehouseSettings | None = None) -> SparkSession:
+def session(app_name: str, settings: LakehouseSettings | None = None,
+            extra: dict[str, str] | None = None) -> SparkSession:  # fmt: skip
     from pyspark.sql import SparkSession
 
     builder = SparkSession.builder.appName(app_name)
-    for k, v in spark_conf(settings or LakehouseSettings()).items():
+    for k, v in {**spark_conf(settings or LakehouseSettings()), **(extra or {})}.items():
         builder = builder.config(k, v)
     return builder.getOrCreate()
 
@@ -86,6 +87,7 @@ def fq(table: Table) -> str:
 
 
 def current_snapshot_id(spark: SparkSession, table: Table) -> int | None:
+    spark.catalog.refreshTable(fq(table))  # the catalog caches tables for 30 s per session
     rows = spark.sql(
         f"SELECT snapshot_id FROM {fq(table)}.history WHERE is_current_ancestor "
         "ORDER BY made_current_at DESC LIMIT 1"

@@ -155,7 +155,7 @@ def scenario() -> list[ScenarioRecord]:
         (legacy_json, Expect("REJECTED", "MALFORMED_PAYLOAD", "legacy JSON producer")),
         (a(8)[:-12], Expect("REJECTED", "MALFORMED_PAYLOAD", "truncated Avro body")),
         (b"\x00" + SCHEMA_UNKNOWN.to_bytes(4, "big") + b"\x02\x04",
-         Expect("REJECTED", "MALFORMED_PAYLOAD", "schema id unknown to the registry")),
+         Expect("UNRESOLVED", "UNRESOLVED_SCHEMA_ID", "schema id not in the registry yet")),
         (a(3, event_id=uid("rogue-3")),
          Expect("REJECTED", "SEQUENCE_CONFLICT", "slot (1, 3) already held")),
         (a(2, battery=33.0),
@@ -268,3 +268,151 @@ def schema_archive() -> list[dict[str, Any]]:
     rows.append({"schema_id": SCHEMA_UNKNOWN, "status": "NOT_FOUND", "schema_type": None,
                  "schema_text": None})  # fmt: skip
     return rows
+
+
+# --------------------------------------------------------------------------- random corpus
+
+
+@dataclass
+class Corpus:
+    """Kafka-compatible records split into ingestion runs, plus the schema archive per run."""
+
+    batches: list[list[KafkaRecord]]
+    archives: list[list[dict[str, Any]]]
+
+
+UNKNOWN_THEN_FOUND = 77  # schema id the registry only learns in a later run
+
+
+def random_corpus(seed: int, robots: int = 6, ticks: int = 30, runs: int = 4) -> Corpus:
+    """Simulator traffic plus the edge cases incremental Silver must handle."""
+    import random
+    import zlib
+
+    from fleetforge.kafka.codec import avro_record_from_payload
+    from fleetforge.simulator.fleet import (
+        FaultConfig,
+        RegisterBoot,
+        RegisterRobot,
+        SimConfig,
+        Telemetry,
+        generate,
+    )
+
+    rng = random.Random(seed)
+    faults = FaultConfig(duplicate_rate=0.06, reorder_rate=0.08, invalid_battery_rate=0.04,
+                         missing_field_rate=0.02, reboot_rate=0.02)  # fmt: skip
+    items = generate(SimConfig(seed=seed, robots=robots, ticks=ticks, faults=faults))
+    firmware, boot_numbers, boots_per_robot, registrations = {}, {}, {}, []
+    for it in items:
+        if isinstance(it, RegisterRobot):
+            firmware[it.robot_id] = it.firmware_version
+            registrations.append(it)
+        elif isinstance(it, RegisterBoot):
+            boots_per_robot[it.robot_id] = boots_per_robot.get(it.robot_id, 0) + 1
+            boot_numbers[it.boot_id] = boots_per_robot[it.robot_id]
+    v2_robots = {r.robot_id for r in registrations if rng.random() < 0.3}
+
+    stream: list[tuple[str, bytes]] = []  # (robot_id, value) in delivery order
+    valid: list[tuple[int, dict]] = []  # (stream index, Avro record) of decodable events
+    legacy: list[tuple[int, Telemetry]] = []  # JSON records a later correction can fix
+    for it in (i for i in items if isinstance(i, Telemetry)):
+        if it.fault == "missing_field":
+            stream.append((it.robot_id, it.body()))
+            if "event_id" in it.payload:
+                legacy.append((len(stream) - 1, it))
+            continue
+        rec = avro_record_from_payload(it.payload, boot_number=boot_numbers[it.payload["boot_id"]],
+                                       firmware_version=firmware[it.robot_id], producer_id="sim",
+                                       produced_at=T0 + timedelta(seconds=len(stream)))  # fmt: skip
+        schema = SCHEMA_V1
+        if it.robot_id in v2_robots:
+            rec["heading_rad"], schema = rng.uniform(-4.0, 4.0), SCHEMA_V2
+        stream.append((it.robot_id, framed(rec, schema)))
+        valid.append((len(stream) - 1, rec))
+
+    def insert_after(index: int, robot: str, value: bytes) -> None:
+        stream.insert(rng.randint(index + 1, len(stream)), (robot, value))
+
+    for index, rec in rng.sample(valid, 3):  # same event_id, other content
+        insert_after(index, rec["robot_id"], framed({**rec, "battery_pct": 1.0}, SCHEMA_V1))
+    for index, rec in rng.sample(valid, 3):  # same slot, other event_id
+        insert_after(index, rec["robot_id"], framed({**rec, "event_id": uid(f"slot-{index}")},
+                                                    SCHEMA_V1))  # fmt: skip
+    for index, rec in rng.sample(valid, 4):  # corrections, one target corrected twice
+        attempts = 2 if rng.random() < 0.5 else 1
+        for attempt in range(1, attempts + 1):
+            target = str(rec["event_id"])
+            fix = {**rec, "event_id": correction_id(target, attempt), "correction_of": target,
+                   "battery_pct": 42.0 + attempt}  # fmt: skip
+            insert_after(index, rec["robot_id"], framed(fix, SCHEMA_V1))
+    for (index, rec), (_, other) in zip(rng.sample(valid, 2), rng.sample(valid, 2), strict=True):
+        if other["robot_id"] != rec["robot_id"]:  # another robot reuses this event_id
+            insert_after(index, other["robot_id"],
+                         framed({**other, "event_id": rec["event_id"]}, SCHEMA_V1))  # fmt: skip
+    for index, it in legacy[:3]:  # fix a rejected legacy record, robot_id possibly missing
+        rec = next(r for _, r in valid if r["robot_id"] == it.robot_id)
+        fix = {**rec, "event_id": correction_id(it.payload["event_id"], 1),
+               "correction_of": it.payload["event_id"], "battery_pct": 50.0}  # fmt: skip
+        insert_after(index, it.robot_id, framed(fix, SCHEMA_V1))
+    for index, rec in rng.sample(valid, 3):  # framed with a schema id the registry lacks
+        body = framed(rec, SCHEMA_V1)
+        stream[index] = (
+            rec["robot_id"],
+            b"\x00" + UNKNOWN_THEN_FOUND.to_bytes(4, "big") + body[5:],
+        )
+
+    cuts = sorted(rng.sample(range(1, len(stream)), runs - 1))
+    bounds = list(zip([0, *cuts], [*cuts, len(stream)], strict=True))
+    offsets: dict[int, int] = {}
+    batches: list[list[KafkaRecord]] = []
+    for lo, hi in bounds:
+        batch = []
+        for robot, value in stream[lo:hi]:
+            part = zlib.crc32(robot.encode()) % 3
+            offset = offsets.get(part, 0)
+            offsets[part] = offset + 1
+            batch.append(KafkaRecord(TELEMETRY_TOPIC, part, offset, robot.encode(), value, None, 0))
+        batches.append(batch)
+
+    late = rng.choice(registrations)  # registered only in the last run
+    batches[0] = [s.record for s in reference_records() if s.record.topic == FIRMWARE_TOPIC
+                  ] + batches[0]  # fmt: skip
+    robot_offset = 0
+    for reg in registrations:
+        if reg is not late:
+            batches[0].append(_robot(robot_offset, reg.robot_id, reg.robot_model,
+                                     reg.firmware_version).record)  # fmt: skip
+            robot_offset += 1
+    batches[-1].append(_robot(robot_offset, late.robot_id, late.robot_model,
+                              late.firmware_version).record)  # fmt: skip
+    if runs > 2:  # a firmware unit change rewrites history of every AMR-200 robot
+        batches[runs // 2].append(_firmware(7, "u", "AMR-200", "2.0.0", "FRACTION", "MM").record)
+
+    found_from = rng.randrange(1, runs) if runs > 1 else runs
+    archives = []
+    for run in range(runs):
+        archive = schema_archive()
+        status = "FOUND" if run >= found_from else "NOT_FOUND"
+        text = schema_str(1) if status == "FOUND" else None
+        archive.append({"schema_id": UNKNOWN_THEN_FOUND, "status": status, "schema_type": None,
+                        "schema_text": text})  # fmt: skip
+        archives.append(archive)
+    return Corpus(batches, archives)
+
+
+def corpus_bronze(corpus: Corpus) -> list[list[dict]]:
+    """Bronze rows of each run, with run times late enough to pass the skew check."""
+    start = datetime(2026, 1, 2, tzinfo=UTC)
+    return [
+        [
+            bronze_row(
+                r,
+                topic_id=TOPIC_IDS[r.topic],
+                run_id=f"run-{n}",
+                ingested_at=start + timedelta(hours=n),
+            )
+            for r in batch
+        ]  # fmt: skip
+        for n, batch in enumerate(corpus.batches)
+    ]

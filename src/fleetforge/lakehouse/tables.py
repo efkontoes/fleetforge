@@ -52,7 +52,7 @@ class Table:
     sort_order: tuple[str, ...] = ()  # physical order within each data file
     identity: tuple[str, ...] = ()  # logical key, guaranteed by the writer
     properties: Mapping[str, str] = field(default_factory=dict)
-    implemented: bool = True  # False: specified here, no job writes it yet
+    writer: str = "spark"  # "spark" jobs or "dbt" models (dbt/models/gold)
 
     @property
     def qualified(self) -> str:
@@ -210,8 +210,7 @@ SILVER_TELEMETRY_EVENTS = Table(
         C("kafka_timestamp", "TIMESTAMP", NULL, "Kafka timestamp of the accepted copy."),
         C("bronze_ingested_at", "TIMESTAMP", NOT_NULL, "Bronze ingested_at of the accepted copy."),
         C("silver_build_id", "STRING", NOT_NULL,
-          "Hash of (Bronze snapshot, reference data, transform version): equal ids mean "
-          "identical inputs and therefore identical rows."),
+          "Build that last computed this row (volatile; pin builds via silver.build_log)."),
         C("transform_version", "STRING", NOT_NULL, "Silver rule set version."),
     ),
     partitioning=("days(observed_at)", "bucket(16, robot_id)"),
@@ -226,12 +225,13 @@ SILVER_TELEMETRY_RECORD_OUTCOMES = Table(
     "quarantine is the REJECTED subset; the payload stays in Bronze (join on coordinates).",
     (
         *COORDINATES,
-        C("outcome", "STRING", NOT_NULL, "ACCEPTED, DUPLICATE or REJECTED."),
-        C("reason_code", "STRING", NULL, "Set for REJECTED only."),
-        C("error_category", "STRING", NULL, "PERMANENT_DATA for REJECTED rows."),
+        C("outcome", "STRING", NOT_NULL,
+          "ACCEPTED, DUPLICATE, REJECTED, or UNRESOLVED (schema id not resolvable yet)."),
+        C("reason_code", "STRING", NULL, "Set for REJECTED and UNRESOLVED."),
+        C("error_category", "STRING", NULL, "PERMANENT_DATA or UNRESOLVED."),
         C("retry_eligible", "BOOLEAN", NOT_NULL,
-          "Rejected only because reference data was missing; a rebuild after the reference "
-          "data arrives can accept it."),
+          "The record may be accepted by a later build once reference data or a schema "
+          "becomes available."),
         C("errors", "STRING", NULL, "JSON array of {code, field, message, ...} details."),
         C("event_id", "STRING", NULL, "event_id if it could be read."),
         C("robot_id", "STRING", NULL, "robot_id if it could be read."),
@@ -281,6 +281,78 @@ SILVER_ROBOT_REGISTRY = Table(
 
 # --------------------------------------------------------------------------- Gold (specified)
 
+SILVER_TELEMETRY_PREPARED = Table(
+    "silver",
+    "telemetry_prepared",
+    "Row-stage output for every Bronze telemetry record, so incremental builds never "
+    "re-decode history.",
+    (
+        *COORDINATES,
+        C("kafka_timestamp", "TIMESTAMP", NULL, "Kafka timestamp."),
+        C("ingested_at", "TIMESTAMP", NOT_NULL, "Bronze ingested_at (arrival order)."),
+        C("value_schema_id", "BIGINT", NULL, "Schema id from the framing."),
+        C("status", "STRING", NOT_NULL, "VALID or INVALID after the row stage."),
+        C("reason_code", "STRING", NULL, "Row-stage rejection reason."),
+        C("errors", "STRING", NULL, "JSON details of the rejection."),
+        C("event_id", "STRING", NULL, "event_id if readable."),
+        C("robot_id", "STRING", NULL, "robot_id if readable."),
+        C("boot_id", "STRING", NULL, "Canonical field (VALID rows)."),
+        C("boot_number", "BIGINT", NULL, "Canonical field (VALID rows)."),
+        C("sequence_number", "BIGINT", NULL, "Canonical field (VALID rows)."),
+        C("observed_at", "TIMESTAMP", NULL, "Canonical field (VALID rows)."),
+        C("robot_model", "STRING", NULL, "Canonical field (VALID rows)."),
+        C("firmware_version", "STRING", NULL, "Canonical field (VALID rows)."),
+        C("battery_pct", "DOUBLE", NULL, "Canonical field (VALID rows)."),
+        C("x_m", "DOUBLE", NULL, "Canonical field (VALID rows)."),
+        C("y_m", "DOUBLE", NULL, "Canonical field (VALID rows)."),
+        C("heading_rad", "DOUBLE", NULL, "Canonical field (VALID rows)."),
+        C("motor_temp_c", "DOUBLE", NULL, "Canonical field (VALID rows)."),
+        C("lidar_ok", "BOOLEAN", NULL, "Canonical field (VALID rows)."),
+        C("source_battery_unit", "STRING", NULL, "Canonical field (VALID rows)."),
+        C("source_position_unit", "STRING", NULL, "Canonical field (VALID rows)."),
+        C("quality_flags", "ARRAY<STRING>", NULL, "Canonical field (VALID rows)."),
+        C("schema_version", "INT", NULL, "Canonical field (VALID rows)."),
+        C("writer_schema_id", "BIGINT", NULL, "Canonical field (VALID rows)."),
+        C("producer_id", "STRING", NULL, "Canonical field (VALID rows)."),
+        C("produced_at", "TIMESTAMP", NULL, "Canonical field (VALID rows)."),
+        C("correction_of", "STRING", NULL, "Canonical field (VALID rows)."),
+        C("fingerprint", "STRING", NULL, "Business-content hash (VALID rows)."),
+    ),
+    partitioning=("bucket(16, robot_id)",),
+    sort_order=("robot_id", "ingested_at", "kafka_partition", "kafka_offset"),
+    identity=("kafka_topic_id", "kafka_partition", "kafka_offset"),
+    properties={"write.parquet.bloom-filter-enabled.column.event_id": "true"},
+)  # fmt: skip
+
+SILVER_BUILD_LOG = Table(
+    "silver",
+    "build_log",
+    "One row per committed Silver build: its inputs, the snapshot it published and how much "
+    "it recomputed. The newest row is the incremental checkpoint.",
+    (
+        C("build_id", "STRING", NOT_NULL, "Deterministic id of this build."),
+        C("mode", "STRING", NOT_NULL, "FULL or INCREMENTAL."),
+        C("base_build_id", "STRING", NULL, "Previous build (INCREMENTAL only)."),
+        C("transform_version", "STRING", NOT_NULL, "Silver rule set version."),
+        C("bronze_snapshot_id", "BIGINT", NOT_NULL, "Bronze snapshot the build read."),
+        C("bronze_max_ingested_at", "TIMESTAMP", NOT_NULL, "Newest Bronze ingested_at covered."),
+        C("reference_fingerprint", "STRING", NOT_NULL, "Hash of the reference data."),
+        C("archive_snapshot_id", "BIGINT", NULL, "Schema archive snapshot the build read."),
+        C("archive_fingerprint", "STRING", NOT_NULL, "Hash of the schema archive."),
+        C("prepared_snapshot_id", "BIGINT", NULL, "silver.telemetry_prepared after the build."),
+        C("outcomes_snapshot_id", "BIGINT", NULL, "silver.telemetry_record_outcomes after it."),
+        C("events_snapshot_id", "BIGINT", NULL, "silver.telemetry_events after it."),
+        C("new_bronze_rows", "BIGINT", NOT_NULL, "Bronze telemetry rows new since the base."),
+        C("reprepared_rows", "BIGINT", NOT_NULL, "Older rows prepared again (reference/schema)."),
+        C("scope_robots", "BIGINT", NOT_NULL, "Robots whose set stage was recomputed."),
+        C("scope_rows", "BIGINT", NOT_NULL, "Prepared rows fed to the set stage."),
+        C("telemetry_rows", "BIGINT", NOT_NULL, "Bronze telemetry rows in the build snapshot."),
+        C("started_at", "TIMESTAMP", NOT_NULL, "Build start."),
+        C("committed_at", "TIMESTAMP", NOT_NULL, "When this row was written."),
+    ),
+    identity=("build_id",),
+)  # fmt: skip
+
 GOLD_ROBOT_DAILY_TELEMETRY = Table(
     "gold",
     "robot_daily_telemetry",
@@ -291,10 +363,12 @@ GOLD_ROBOT_DAILY_TELEMETRY = Table(
         C("robot_model", "STRING", NOT_NULL, "Robot model."),
         C("events", "BIGINT", NOT_NULL, "Current accepted events."),
         C("boots", "BIGINT", NOT_NULL, "Distinct boots with events that day."),
+        C("observed_positions", "BIGINT", NOT_NULL, "Distinct (boot, sequence_number) seen."),
         C("expected_events", "BIGINT", NOT_NULL,
-          "Sum over boots of (max - min sequence_number + 1) within the day."),
+          "observed_positions plus missing_sequences."),
         C("missing_sequences", "BIGINT", NOT_NULL,
-          "expected_events - events: lost, rejected or not yet arrived."),
+          "Sequence numbers absent between consecutive observed positions of a boot, counted "
+          "on the day of the later observation, so gaps across midnight are not lost."),
         C("out_of_order_events", "BIGINT", NOT_NULL, "Events with arrived_out_of_order."),
         C("duplicate_deliveries", "BIGINT", NOT_NULL, "Sum of duplicate_deliveries."),
         C("corrected_events", "BIGINT", NOT_NULL, "Current events that are corrections."),
@@ -302,20 +376,22 @@ GOLD_ROBOT_DAILY_TELEMETRY = Table(
         C("battery_pct_avg", "DOUBLE", NOT_NULL, "Mean battery over events."),
         C("battery_pct_max", "DOUBLE", NOT_NULL, "Maximum battery."),
         C("distance_m", "DOUBLE", NOT_NULL,
-          "Sum of straight-line steps between consecutive sequence numbers of a boot; steps "
-          "across a sequence gap are not counted."),
+          "Sum of straight-line steps between consecutive sequence numbers of a boot with "
+          "non-decreasing observed_at; steps across gaps or clock regressions are skipped."),
         C("motor_temp_c_max", "DOUBLE", NULL, "Maximum motor temperature."),
         C("lidar_fault_events", "BIGINT", NOT_NULL, "Events with lidar_ok = false."),
         C("first_observed_at", "TIMESTAMP", NOT_NULL, "Earliest observed_at."),
         C("last_observed_at", "TIMESTAMP", NOT_NULL, "Latest observed_at."),
         C("is_final", "BOOLEAN", NOT_NULL,
-          "Day older than the allowed lateness (7 days, Kafka retention): late arrivals can "
-          "no longer change the row."),
+          "Older than the correction window (14 days before the newest ingestion) and the "
+          "robot has no open retry-eligible records (an unreadable record counts for the robot "
+          "of its Kafka key, or for every robot without one). Final rows are frozen; "
+          "recomputing them needs the reopen variables."),
         C("silver_build_id", "STRING", NOT_NULL, "Silver build the row was computed from."),
     ),
     partitioning=("months(observed_date)",),
     identity=("observed_date", "robot_id"),
-    implemented=False,
+    writer="dbt",
 )  # fmt: skip
 
 GOLD_PIPELINE_DAILY_QUALITY = Table(
@@ -325,7 +401,7 @@ GOLD_PIPELINE_DAILY_QUALITY = Table(
     (
         C("ingest_date", "DATE", NOT_NULL, "UTC date of bronze_ingested_at."),
         C("source_topic", "STRING", NOT_NULL, "Kafka topic."),
-        C("outcome", "STRING", NOT_NULL, "ACCEPTED, DUPLICATE or REJECTED."),
+        C("outcome", "STRING", NOT_NULL, "ACCEPTED, DUPLICATE, REJECTED or UNRESOLVED."),
         C("reason_code", "STRING", NOT_NULL,
           "Rejection reason, or NONE for ACCEPTED and DUPLICATE (key columns are never NULL)."),
         C("retry_eligible", "BOOLEAN", NOT_NULL, "See silver.telemetry_record_outcomes."),
@@ -336,7 +412,30 @@ GOLD_PIPELINE_DAILY_QUALITY = Table(
     ),
     partitioning=("months(ingest_date)",),
     identity=("ingest_date", "source_topic", "outcome", "reason_code"),
-    implemented=False,
+    writer="dbt",
+)  # fmt: skip
+
+GOLD_PIPELINE_DAILY_RATES = Table(
+    "gold",
+    "pipeline_daily_rates",
+    "Daily quality rates with explicit denominators. UNRESOLVED records are counted but "
+    "excluded from the denominator, since they have not been classified yet.",
+    (
+        C("ingest_date", "DATE", NOT_NULL, "UTC date of bronze_ingested_at."),
+        C("source_topic", "STRING", NOT_NULL, "Kafka topic."),
+        C("bronze_records", "BIGINT", NOT_NULL, "All Bronze records of the day."),
+        C("classified", "BIGINT", NOT_NULL, "ACCEPTED + DUPLICATE + REJECTED."),
+        C("accepted", "BIGINT", NOT_NULL, "ACCEPTED records."),
+        C("duplicates", "BIGINT", NOT_NULL, "DUPLICATE records."),
+        C("rejected", "BIGINT", NOT_NULL, "Permanently REJECTED records."),
+        C("unresolved", "BIGINT", NOT_NULL, "UNRESOLVED records (not in the denominator)."),
+        C("invalid_rate", "DOUBLE", NULL, "rejected / classified; NULL when classified = 0."),
+        C("duplicate_rate", "DOUBLE", NULL, "duplicates / classified; NULL when classified = 0."),
+        C("silver_build_id", "STRING", NOT_NULL, "Silver build the row was computed from."),
+    ),
+    partitioning=("months(ingest_date)",),
+    identity=("ingest_date", "source_topic"),
+    writer="dbt",
 )  # fmt: skip
 
 GOLD_ROBOT_STATE_OBSERVATIONS = Table(
@@ -365,20 +464,22 @@ GOLD_ROBOT_STATE_OBSERVATIONS = Table(
         C("motor_temp_c", "DOUBLE", NULL, "Motor temperature."),
         C("lidar_ok", "BOOLEAN", NULL, "Lidar self-check."),
         C("dt_prev_s", "DOUBLE", NULL,
-          "Seconds since the previous sequence number of the same episode (observed_at); NULL "
-          "at an episode start or after a sequence gap."),
+          "Seconds since the previous sequence number of the same episode; NULL with a flag "
+          "when there is no valid previous step."),
         C("vx_mps", "DOUBLE", NULL, "Finite-difference x velocity when dt_prev_s > 0."),
         C("vy_mps", "DOUBLE", NULL, "Finite-difference y velocity when dt_prev_s > 0."),
         C("split", "STRING", NOT_NULL,
           "train, validation or test, by hash(episode_id, split_seed): no episode spans splits."),
-        C("quality_flags", "ARRAY<STRING>", NOT_NULL, "Silver flags plus Gold flags."),
+        C("split_robot", "STRING", NOT_NULL,
+          "Stricter split by hash(robot_id, split_seed): no robot spans splits."),
+        C("quality_flags", "ARRAY<STRING>", NOT_NULL,
+          "Silver flags plus Gold flags (e.g. NO_PREVIOUS_STEP, SEQUENCE_GAP, NON_POSITIVE_DT)."),
         *COORDINATES,
         C("silver_build_id", "STRING", NOT_NULL, "Silver build."),
     ),
-    partitioning=("release_id", "split"),
+    partitioning=("release_id",),
     sort_order=("robot_id", "boot_number", "sequence_number"),
     identity=("release_id", "observation_id"),
-    implemented=False,
 )  # fmt: skip
 
 GOLD_TRAINING_DATASET_RELEASES = Table(
@@ -390,12 +491,18 @@ GOLD_TRAINING_DATASET_RELEASES = Table(
         C("created_at", "TIMESTAMP", NOT_NULL, "Release time."),
         C("silver_build_id", "STRING", NOT_NULL, "Silver build used."),
         C("silver_events_snapshot_id", "BIGINT", NOT_NULL, "Iceberg snapshot read."),
+        C("silver_outcomes_snapshot_id", "BIGINT", NOT_NULL, "Outcomes snapshot of that build."),
+        C("bronze_snapshot_id", "BIGINT", NOT_NULL, "Bronze snapshot of that build."),
+        C("observations_snapshot_id", "BIGINT", NOT_NULL,
+          "gold.robot_state_observations snapshot holding this release (tagged)."),
         C("transform_version", "STRING", NOT_NULL, "Silver rule set version."),
-        C("split_seed", "STRING", NOT_NULL, "Seed of the episode hash split."),
+        C("feature_schema_version", "STRING", NOT_NULL, "Version of the feature definitions."),
+        C("split_seed", "STRING", NOT_NULL, "Seed of the episode and robot hash splits."),
         C("selection", "STRING", NOT_NULL, "JSON of filters and exclusions applied."),
         C("rows_train", "BIGINT", NOT_NULL, "Rows in train."),
         C("rows_validation", "BIGINT", NOT_NULL, "Rows in validation."),
         C("rows_test", "BIGINT", NOT_NULL, "Rows in test."),
+        C("rows_total", "BIGINT", NOT_NULL, "All rows of the release."),
         C("content_sha256", "STRING", NOT_NULL,
           "Hash over the ordered rows: equal hashes mean an identical dataset."),
         C("readiness", "STRING", NOT_NULL,
@@ -404,7 +511,43 @@ GOLD_TRAINING_DATASET_RELEASES = Table(
         C("known_limitations", "STRING", NOT_NULL, "Free text, required."),
     ),
     identity=("release_id",),
-    implemented=False,
+)  # fmt: skip
+
+OPS_TABLE_STORAGE = Table(
+    "ops",
+    "table_storage",
+    "One row per table and maintenance run: files, bytes, snapshots, tags and orphans.",
+    (
+        C("run_id", "STRING", NOT_NULL, "Maintenance run."),
+        C("table_name", "STRING", NOT_NULL, "namespace.table."),
+        C("snapshots", "BIGINT", NOT_NULL, "Snapshots kept after expiry."),
+        C("tags", "BIGINT", NOT_NULL, "Tags (release pins) on the table."),
+        C("data_files", "BIGINT", NOT_NULL, "Live data files."),
+        C("data_bytes", "BIGINT", NOT_NULL, "Bytes in live data files."),
+        C("records", "BIGINT", NOT_NULL, "Rows in the current snapshot."),
+        C("small_files", "BIGINT", NOT_NULL, "Live data files under 8 MiB."),
+        C("orphan_files", "BIGINT", NOT_NULL, "Files in storage that no snapshot references."),
+        C("expired_snapshots", "BIGINT", NOT_NULL, "Snapshots this run expired."),
+        C("measured_at", "TIMESTAMP", NOT_NULL, "When the table was measured."),
+    ),
+    identity=("run_id", "table_name"),
+)  # fmt: skip
+
+OPS_RECONCILIATION_RUNS = Table(
+    "ops",
+    "reconciliation_runs",
+    "One row per check of a reconciliation run (Kafka, Bronze, Silver, Gold, releases).",
+    (
+        C("run_id", "STRING", NOT_NULL, "Reconciliation run."),
+        C("check_name", "STRING", NOT_NULL, "Invariant checked."),
+        C("passed", "BOOLEAN", NOT_NULL, "Whether the invariant held."),
+        C("expected", "STRING", NULL, "Expected value (JSON)."),
+        C("actual", "STRING", NULL, "Observed value (JSON)."),
+        C("detail", "STRING", NULL, "Short explanation or sample of offending keys."),
+        C("silver_build_id", "STRING", NULL, "Silver build checked."),
+        C("checked_at", "TIMESTAMP", NOT_NULL, "When the check ran."),
+    ),
+    identity=("run_id", "check_name"),
 )  # fmt: skip
 
 ALL_TABLES: tuple[Table, ...] = (
@@ -414,10 +557,15 @@ ALL_TABLES: tuple[Table, ...] = (
     SILVER_TELEMETRY_RECORD_OUTCOMES,
     SILVER_FIRMWARE_CONTRACTS,
     SILVER_ROBOT_REGISTRY,
+    SILVER_TELEMETRY_PREPARED,
+    SILVER_BUILD_LOG,
     GOLD_ROBOT_DAILY_TELEMETRY,
     GOLD_PIPELINE_DAILY_QUALITY,
+    GOLD_PIPELINE_DAILY_RATES,
     GOLD_ROBOT_STATE_OBSERVATIONS,
     GOLD_TRAINING_DATASET_RELEASES,
+    OPS_RECONCILIATION_RUNS,
+    OPS_TABLE_STORAGE,
 )
 
 # Spark SQL type -> (Iceberg type, Trino type), for documentation.
@@ -459,8 +607,7 @@ def render_markdown(tables: Iterable[Table] = ALL_TABLES) -> str:
         "",
     ]
     for t in tables:
-        status = "implemented (slice 1)" if t.implemented else "specified, not implemented yet"
-        out += [f"## `{t.qualified}`", "", t.doc, "", f"* Status: {status}"]
+        out += [f"## `{t.qualified}`", "", t.doc, "", f"* Written by: {t.writer}"]
         out.append(f"* Identity: `({', '.join(t.identity)})`" if t.identity else "* Identity: none")
         out.append(
             f"* Partitioning: `{', '.join(t.partitioning)}`" if t.partitioning else

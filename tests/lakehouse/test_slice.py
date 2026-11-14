@@ -42,6 +42,7 @@ from fleetforge.lakehouse.silver import (
 from fleetforge.lakehouse.tables import (
     BRONZE_KAFKA_RECORDS,
     BRONZE_REGISTRY_SCHEMAS,
+    SILVER_BUILD_LOG,
     SILVER_TELEMETRY_EVENTS,
     SILVER_TELEMETRY_RECORD_OUTCOMES,
 )
@@ -276,56 +277,118 @@ def test_bronze_crash_before_commit_restarts_without_loss_or_duplicates(spark, c
     assert spark.table(fq(BRONZE_KAFKA_RECORDS)).count() == expected
 
 
-def test_silver_crash_between_tables_is_detectable_and_heals_on_restart(spark, clean_lake):
+def _append_bronze_rows(spark, rows) -> int:
+    df = spark.createDataFrame(rows, BRONZE_KAFKA_RECORDS.spark_schema())
+    ranges = [OffsetRange(r["source_topic"], r["kafka_topic_id"], r["kafka_partition"],
+                          r["kafka_offset"], r["kafka_offset"] + 1) for r in rows]  # fmt: skip
+    return bj.append_bronze(spark, df, ranges, {})
+
+
+def _sync_archive(spark, archive) -> None:
+    """Append archive rows the table does not hold yet, as the Bronze archiver does."""
+    have = {(r[0], r[1]) for r in spark.table(fq(BRONZE_REGISTRY_SCHEMAS))
+            .select("schema_id", "status").collect()}  # fmt: skip
+    rows = [{**a, "schema_sha256": None, "registry_url": "fixture", "first_seen_topic":
+             TELEMETRY_TOPIC, "archived_at": fx.RUNS[1][1], "ingestion_run_id": "fixture"}
+            for a in archive if (a["schema_id"], a["status"]) not in have]  # fmt: skip
+    if rows:
+        df = spark.createDataFrame(rows, BRONZE_REGISTRY_SCHEMAS.spark_schema())
+        df.writeTo(fq(BRONZE_REGISTRY_SCHEMAS)).append()
+
+
+def _digest(rows, key):
+    import hashlib
+    import json
+
+    lines = sorted((key(r), json.dumps({k: v for k, v in r.items() if k != "silver_build_id"},
+                                       sort_keys=True, default=str)) for r in rows)  # fmt: skip
+    return hashlib.sha256("\n".join(x for _, x in lines).encode()).hexdigest()
+
+
+def _python_full(runs, archive):
+    rows = [r for run in runs for r in run]
+    ref = build_reference([r for r in rows if r["source_topic"] == FIRMWARE_TOPIC],
+                          [r for r in rows if r["source_topic"] == ROBOT_EVENTS_TOPIC])  # fmt: skip
+    writers = parse_writer_schemas(archive)
+    tel = [r for r in rows if r["source_topic"] == TELEMETRY_TOPIC]
+    return build([prepare(r, writers, ref) for r in tel], build_id="python")
+
+
+def _assert_matches(spark, want):
+    events = _collect(spark.table(fq(SILVER_TELEMETRY_EVENTS)), EVENT_COLUMNS)
+    outcomes = _collect(spark.table(fq(SILVER_TELEMETRY_RECORD_OUTCOMES)), OUTCOME_COLUMNS)
+    assert _digest(events, lambda e: e["event_id"]) == _digest(want.events, lambda e: e["event_id"])
+    assert _digest(outcomes, _key) == _digest(want.outcomes, _key)
+
+
+def _corpus_runs(spark, corpus, runs, fault=None):
+    """Ingest corpus runs one by one and build Silver after each; return the build reports."""
+    reports = []
+    for n in runs:
+        _append_bronze_rows(spark, fx.corpus_bronze(corpus)[n])
+        _sync_archive(spark, corpus.archives[n])
+        reports.append(sj.build_with_retry(spark, fault=fault or (lambda stage: None)))
+    return reports
+
+
+def test_spark_incremental_equals_full_on_a_random_corpus(spark, clean_lake, record_property):
     ensure_tables(spark, [BRONZE_KAFKA_RECORDS, BRONZE_REGISTRY_SCHEMAS])
-    _ingest(spark, 1)
-    _archive(spark)
-    first = sj.build_silver(spark)
-    _ingest(spark, 2)
+    corpus = fx.random_corpus(2, robots=5, ticks=25, runs=3)
+    reports = _corpus_runs(spark, corpus, range(3))
+    assert [r["mode"] for r in reports] == ["FULL", "INCREMENTAL", "INCREMENTAL"]
+    want = _python_full(fx.corpus_bronze(corpus), corpus.archives[-1])
+    _assert_matches(spark, want)
+    record_property("incremental_reports", [
+        {k: r[k] for k in ("mode", "new_bronze_rows", "reprepared_rows", "scope_robots",
+                           "scope_rows", "telemetry_rows")} for r in reports])  # fmt: skip
+    rebuilt = sj.build_silver(spark, full=True)  # Spark full rebuild over the same Bronze
+    assert rebuilt["mode"] == "FULL"
+    _assert_matches(spark, want)
+
+
+def test_spark_incremental_recovers_from_a_crash_after_the_prepared_merge(spark, clean_lake):
+    ensure_tables(spark, [BRONZE_KAFKA_RECORDS, BRONZE_REGISTRY_SCHEMAS])
+    corpus = fx.random_corpus(4, robots=4, ticks=20, runs=2)
+    _corpus_runs(spark, corpus, [0])
+    logged = spark.table(fq(SILVER_BUILD_LOG)).count()
     with pytest.raises(Crash):
-        sj.build_silver(spark, fault=_crash_at("before_events"))
-    # The documented window: outcomes are already the new build, events still the old.
-    out_ids = {
-        r[0]
-        for r in spark.sql(
-            f"SELECT DISTINCT silver_build_id FROM {fq(SILVER_TELEMETRY_RECORD_OUTCOMES)}"
-        ).collect()
-    }
-    ev_ids = {
-        r[0]
-        for r in spark.sql(
-            f"SELECT DISTINCT silver_build_id FROM {fq(SILVER_TELEMETRY_EVENTS)}"
-        ).collect()
-    }
-    assert ev_ids == {first["build_id"]} and out_ids != ev_ids  # readers can tell
-    healed = sj.build_silver(spark)  # the published build differs, so the restart rebuilds
-    assert healed["status"] == "built"
-    out_ids = {
-        r[0]
-        for r in spark.sql(
-            f"SELECT DISTINCT silver_build_id FROM {fq(SILVER_TELEMETRY_RECORD_OUTCOMES)}"
-        ).collect()
-    }
-    ev_ids = {
-        r[0]
-        for r in spark.sql(
-            f"SELECT DISTINCT silver_build_id FROM {fq(SILVER_TELEMETRY_EVENTS)}"
-        ).collect()
-    }
-    assert out_ids == ev_ids == {healed["build_id"]}
+        _corpus_runs(spark, corpus, [1], fault=_crash_at("after_prepared"))
+    assert spark.table(fq(SILVER_BUILD_LOG)).count() == logged  # not published
+    healed = sj.build_silver(spark)
+    assert healed["mode"] == "INCREMENTAL"
+    _assert_matches(spark, _python_full(fx.corpus_bronze(corpus), corpus.archives[1]))
 
 
-def test_late_batch_creates_a_new_version_and_the_old_one_stays_readable(spark, clean_lake):
-    """Runs last on purpose: it leaves two Silver versions for test_trino.py."""
+def test_a_concurrent_events_writer_fails_validation_and_the_build_is_retried(spark, clean_lake):
     ensure_tables(spark, [BRONZE_KAFKA_RECORDS, BRONZE_REGISTRY_SCHEMAS])
-    _ingest(spark, 1)
-    _archive(spark)
-    v1 = sj.build_silver(spark)
-    v1_snap = current_snapshot_id(spark, SILVER_TELEMETRY_EVENTS)
-    v1_count = spark.table(fq(SILVER_TELEMETRY_EVENTS)).count()
-    _ingest(spark, 2)
-    v2 = sj.build_silver(spark)
-    assert v2["build_id"] != v1["build_id"]
-    assert spark.table(fq(SILVER_TELEMETRY_EVENTS)).count() == v1_count + 5
-    old = spark.sql(f"SELECT count(*) FROM {fq(SILVER_TELEMETRY_EVENTS)} VERSION AS OF {v1_snap}")
-    assert old.collect()[0][0] == v1_count
+    corpus = fx.random_corpus(6, robots=4, ticks=20, runs=2)
+    _corpus_runs(spark, corpus, [0])
+    injected = []
+
+    def intruder(stage):  # a stale writer rewrites one event mid-build, once
+        if stage == "before_events" and not injected:
+            spark.sql(f"UPDATE {fq(SILVER_TELEMETRY_EVENTS)} SET duplicate_deliveries = 99 "
+                      f"WHERE event_id = (SELECT min(event_id) FROM {fq(SILVER_TELEMETRY_EVENTS)})")  # fmt: skip
+            injected.append(stage)
+
+    original = sj.build_silver
+    attempts = []
+    sj.build_silver = lambda *a, **k: attempts.append(1) or original(*a, **k)
+    try:
+        report = _corpus_runs(spark, corpus, [1], fault=intruder)[0]
+    finally:
+        sj.build_silver = original
+    assert injected and len(attempts) == 2 and report["mode"] == "INCREMENTAL"
+    _assert_matches(spark, _python_full(fx.corpus_bronze(corpus), corpus.archives[1]))
+
+
+def test_a_new_rule_version_forces_a_full_rebuild(spark, clean_lake, monkeypatch):
+    ensure_tables(spark, [BRONZE_KAFKA_RECORDS, BRONZE_REGISTRY_SCHEMAS])
+    corpus = fx.random_corpus(8, robots=3, ticks=15, runs=1)
+    _corpus_runs(spark, corpus, [0])
+    monkeypatch.setattr(sj, "TRANSFORM_VERSION", "silver-telemetry/test-upgrade")
+    report = sj.build_silver(spark)
+    assert report["mode"] == "FULL" and report["transform_version"].endswith("test-upgrade")
+    versions = {r[0] for r in spark.sql(
+        f"SELECT DISTINCT transform_version FROM {fq(SILVER_TELEMETRY_EVENTS)}").collect()}  # fmt: skip
+    assert versions == {"silver-telemetry/test-upgrade"}
