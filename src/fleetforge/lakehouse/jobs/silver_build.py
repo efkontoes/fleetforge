@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import math
+import time
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -306,17 +307,25 @@ class ConcurrentWrite(RuntimeError):
 def replace_scope(spark: SparkSession, df: DataFrame, bounds: dict[str, int],
                   base: int | None) -> None:  # fmt: skip
     """Swap the events of each robot from its first recomputed boot, in one row-level commit."""
+    # Deletes are rows matched by event_id, so only files holding affected events are rewritten.
+    from pyspark.sql import functions as F
+
     if current_snapshot_id(spark, SILVER_TELEMETRY_EVENTS) != base:
         raise ConcurrentWrite("silver.telemetry_events changed during the build")
-    df.createOrReplaceTempView("_src_events")
-    scope = " OR ".join(
-        "(t.robot_id = '" + r.replace("'", "''") + f"' AND t.boot_number >= {int(b)})"
-        for r, b in sorted(bounds.items())
-    )
+    b = spark.createDataFrame(list(bounds.items()), "robot_id STRING, lo BIGINT")
+    target = spark.table(fq(SILVER_TELEMETRY_EVENTS))
+    old = target.join(F.broadcast(b), "robot_id").where(F.col("boot_number") >= F.col("lo"))
+    gone = old.select("event_id").join(df.select("event_id"), "event_id", "left_anti")
+    cols = SILVER_TELEMETRY_EVENTS.column_names
+    keep = df.select(*cols, F.lit(False).alias("_gone"))
+    drop = gone.join(target, "event_id").select(*cols, F.lit(True).alias("_gone"))
+    keep.unionByName(drop).localCheckpoint().createOrReplaceTempView("_src_events")
+    sets = ", ".join(f"t.{c} = s.{c}" for c in cols)
     spark.sql(f"MERGE INTO {fq(SILVER_TELEMETRY_EVENTS)} t USING _src_events s "
               "ON t.event_id = s.event_id "
-              "WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT * "
-              f"WHEN NOT MATCHED BY SOURCE AND ({scope}) THEN DELETE")  # fmt: skip
+              f"WHEN MATCHED AND s._gone THEN DELETE WHEN MATCHED THEN UPDATE SET {sets} "
+              f"WHEN NOT MATCHED AND NOT s._gone THEN INSERT ({', '.join(cols)}) "
+              f"VALUES ({', '.join('s.' + c for c in cols)})")  # fmt: skip
 
 
 def link_keys(df: DataFrame) -> DataFrame:
@@ -329,11 +338,13 @@ def link_keys(df: DataFrame) -> DataFrame:
 def scope_of(prepared: DataFrame, changed: DataFrame,
              whole: set[str]) -> tuple[dict[str, int], DataFrame]:  # fmt: skip
     """Spark mirror of incremental.closure(): first boot per robot, and the rows to rebuild."""
-    from pyspark.sql import Window
     from pyspark.sql import functions as F
 
     spark = prepared.sparkSession
     bounds = dict.fromkeys(whole, 0)
+    # The closure only needs keys: iterate on a cached narrow copy, read full rows once.
+    narrow = prepared.select(*COORDS, "robot_id", "boot_number", "event_id",
+                             "correction_of").localCheckpoint()  # fmt: skip
 
     def lower(df: DataFrame) -> bool:
         rows = (df.where("robot_id IS NOT NULL AND boot_number IS NOT NULL")
@@ -344,22 +355,20 @@ def scope_of(prepared: DataFrame, changed: DataFrame,
 
     def in_bounds() -> DataFrame:
         b = spark.createDataFrame(list(bounds.items()) or [("", 0)], "robot_id STRING, lo BIGINT")
-        hit = prepared.join(F.broadcast(b), "robot_id").where(F.col("boot_number") >= F.col("lo"))
-        return hit.select(*prepared.columns)
+        hit = narrow.join(F.broadcast(b), "robot_id").where(F.col("boot_number") >= F.col("lo"))
+        return hit.select(*narrow.columns)
 
     lower(changed)
     while True:
         mine = in_bounds()
         keys = link_keys(changed).union(link_keys(mine)).distinct()
-        linked = prepared.join(keys, prepared.event_id == keys.k, "left_semi").union(
-            prepared.join(keys, prepared.correction_of == keys.k, "left_semi"))  # fmt: skip
+        linked = narrow.join(keys, narrow.event_id == keys.k, "left_semi").union(
+            narrow.join(keys, narrow.correction_of == keys.k, "left_semi"))  # fmt: skip
         if not lower(linked):
             break
-    by_coords = prepared.join(changed.select(*COORDS), list(COORDS), "left_semi")
-    extra = linked.unionByName(by_coords).join(mine.select(*COORDS), list(COORDS), "left_anti")
-    once = Window.partitionBy(*COORDS).orderBy(*COORDS)
-    extra = extra.withColumn("_n", F.row_number().over(once)).where("_n = 1").drop("_n")
-    return bounds, mine.unionByName(extra)
+    coords = (mine.select(*COORDS).union(linked.select(*COORDS))
+              .union(changed.select(*COORDS)).distinct())  # fmt: skip
+    return bounds, prepared.join(coords, list(COORDS), "left_semi")
 
 
 def reference_at(bronze: DataFrame, topics: dict[str, str]) -> Reference:
@@ -403,6 +412,13 @@ def build_silver(
 
     topics = reference_topics or {"firmware": FIRMWARE_TOPIC, "robots": ROBOT_EVENTS_TOPIC}
     started = datetime.now(UTC)
+    clock, timings = [time.monotonic()], {}
+
+    def lap(name: str) -> None:
+        now = time.monotonic()
+        timings[name] = round(now - clock[0], 1)
+        clock[0] = now
+
     ensure_tables(spark, SILVER_TABLES)
     snap = bronze_snapshot or current_snapshot_id(spark, BRONZE_KAFKA_RECORDS)
     if snap is None:
@@ -445,6 +461,13 @@ def build_silver(
         redo = telemetry.where(~is_new).join(redo_keys, list(COORDS), "left_semi")
         reprepared = redo.count()
         source = new_rows.unionByName(redo)
+        total = telemetry.count()
+        lake = LakehouseSettings()
+        large = total >= lake.full_rebuild_min_rows
+        if large and reprepared + new_rows.count() > lake.full_rebuild_share * total:
+            # Measured: re-merging most of a large table costs about 3x a full rebuild.
+            mode, bid, reprepared = "FULL", build_id(int(snap), ref_fp, archive_fp), 0
+            source, new_rows, base = telemetry, telemetry, None
 
     framed = source.where(F.col("value_framing") == CONFLUENT).select("value_schema_id")
     missing = sorted(
@@ -454,7 +477,9 @@ def build_silver(
         raise SchemaArchiveIncomplete(f"schema ids {missing} are not archived; run Bronze first")
 
     changed = source.select(*ROW_STAGE_INPUT).mapInPandas(row_stage(archive, ref), PREPARED_SCHEMA)
+    lap("plan")
     changed = changed.localCheckpoint()  # computed once, and later writes cannot change it
+    lap("row_stage")
     new_count = new_rows.count()
     if mode == "FULL":
         write_replace(
@@ -466,12 +491,14 @@ def build_silver(
             spark, conform(changed, SILVER_TELEMETRY_PREPARED), SILVER_TELEMETRY_PREPARED
         )
         fault("after_prepared")
+        lap("prepared_merge")
         old = F.col("ingested_at") <= F.lit(base["bronze_max_ingested_at"])
         reprepared_robots = changed.where(old & F.col("robot_id").isNotNull()).select("robot_id")
         whole = {r[0] for r in reprepared_robots.distinct().collect()} if reprepared else set()
         bounds, scope = scope_of(spark.table(fq(SILVER_TELEMETRY_PREPARED)), changed, whole)
     scope = scope.localCheckpoint()
     scope_rows = scope.count()
+    lap("scope")
     events, outcomes = set_stage(scope, bid)
     events_base = current_snapshot_id(spark, SILVER_TELEMETRY_EVENTS)
     if mode == "FULL":
@@ -481,13 +508,16 @@ def build_silver(
         scope_robots = scope.where("robot_id IS NOT NULL").select("robot_id").distinct().count()
     else:
         merge_by_coords(spark, outcomes, SILVER_TELEMETRY_RECORD_OUTCOMES)
+        lap("outcomes_merge")
         fault("before_events")
         if bounds:
             replace_scope(spark, events, bounds, events_base)
+        lap("events_swap")
         scope_robots = len(bounds)
     fw, regs = reference_rows(ref, bid)
     for rows, table in ((fw, SILVER_FIRMWARE_CONTRACTS), (regs, SILVER_ROBOT_REGISTRY)):
         write_replace(spark, spark.createDataFrame(rows, table.spark_schema()), table, {})
+    lap("reference_tables")
     fault("before_build_log")
     max_ingested = telemetry.agg(F.max("ingested_at")).collect()[0][0]
     entry = {
@@ -506,7 +536,9 @@ def build_silver(
     row = spark.createDataFrame([entry], SILVER_BUILD_LOG.spark_schema())
     row.writeTo(fq(SILVER_BUILD_LOG)).append()
     pin_base(spark, int(snap), archive_snap)
-    return {"status": "built", **{k: v for k, v in entry.items() if k != "started_at"}}
+    lap("build_log")
+    return {"status": "built", **{k: v for k, v in entry.items() if k != "started_at"},
+            "timings_s": timings}  # fmt: skip
 
 
 def pin_base(spark: SparkSession, bronze_snap: int, archive_snap: int | None) -> None:

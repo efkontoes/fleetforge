@@ -32,6 +32,9 @@ class LakehouseSettings(BaseSettings):
     )
     shuffle_partitions: int = 4
     record_runs: bool = True  # write each job run to lakehouse_ops (monitoring, lineage)
+    # A change reaching this share of a large Silver table is rebuilt in full instead.
+    full_rebuild_share: float = 0.3
+    full_rebuild_min_rows: int = 100_000
     # Source topics; a validation run can point the jobs at its own topics.
     telemetry_topic: str = "telemetry.raw.v1"
     robot_events_topic: str = "fleet.robot-events.v1"
