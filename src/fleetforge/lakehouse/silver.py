@@ -38,7 +38,7 @@ from fleetforge.lakehouse.tables import (
     SILVER_TELEMETRY_RECORD_OUTCOMES,
 )
 
-TRANSFORM_VERSION = "silver-telemetry/2"  # bump on any rule change
+TRANSFORM_VERSION = "silver-telemetry/3"  # bump on any rule change
 TELEMETRY_TOPIC = "telemetry.raw.v1"
 # Part of the rule set (Milestone 2's default), so not read from the environment.
 MAX_CLOCK_SKEW = timedelta(seconds=300)
@@ -115,6 +115,7 @@ class Prepared:
     errors: str | None = None  # JSON array
     event_id: str | None = None  # identity hints, also for rejected records
     robot_id: str | None = None
+    correction_of: str | None = None  # kept on rejections so incremental links survive
 
     @property
     def arrival(self) -> tuple:
@@ -149,8 +150,8 @@ def _errors_json(errors: Iterable[Mapping[str, Any]]) -> str:
     return json.dumps(list(errors), sort_keys=True, separators=(",", ":"), default=str)
 
 
-def _reject(row, code, errors, event_id=None, robot_id=None) -> Prepared:
-    return Prepared(row, None, str(code), _errors_json(errors), event_id, robot_id)
+def _reject(row, code, errors, event_id=None, robot_id=None, correction_of=None) -> Prepared:
+    return Prepared(row, None, str(code), _errors_json(errors), event_id, robot_id, correction_of)
 
 
 def wrap_angle(rad: float) -> float:
@@ -223,7 +224,8 @@ def prepare(row: Mapping[str, Any], writers: Mapping[int, Any], reference: Refer
     obs = observation_from_record(rec)  # Milestone 2 contract rules, unchanged
     if isinstance(obs, Rejection):
         eid, rid = identity_hints(json_safe(rec))
-        return _reject(row, obs.reason_code, obs.errors, _s(eid), _s(rid))
+        return _reject(row, obs.reason_code, obs.errors, _s(eid), _s(rid),
+                       _link(rec.get("correction_of")))  # fmt: skip
     eid, rid = str(obs.event_id), str(obs.robot_id)
 
     model = reference.robot_model(rid)
@@ -231,13 +233,13 @@ def prepare(row: Mapping[str, Any], writers: Mapping[int, Any], reference: Refer
         return _reject(row, ReasonCode.UNKNOWN_ROBOT,
                        [{"code": "UNKNOWN_ROBOT", "field": "robot_id",
                          "message": "no RobotRegistered event in Bronze for this robot"}],
-                       eid, rid)  # fmt: skip
+                       eid, rid, _link(obs.correction_of))  # fmt: skip
     contract = reference.firmware.get((model, obs.firmware_version))
     if contract is None:
         return _reject(row, ReasonCode.UNKNOWN_FIRMWARE,
                        [{"code": "UNKNOWN_FIRMWARE", "field": "firmware_version",
                          "message": f"no firmware contract for {model} {obs.firmware_version}"}],
-                       eid, rid)  # fmt: skip
+                       eid, rid, _link(obs.correction_of))  # fmt: skip
 
     battery = obs.battery_pct * BATTERY_MULTIPLIER[contract.battery_unit]
     divisor = POSITION_DIVISOR[contract.position_unit]
@@ -245,7 +247,7 @@ def prepare(row: Mapping[str, Any], writers: Mapping[int, Any], reference: Refer
     converted: Observation = replace(obs, battery_pct=battery, x_m=x_m, y_m=y_m)
     sem = check_semantics(converted, row["ingested_at"], MAX_CLOCK_SKEW)  # type: ignore[arg-type]
     if sem is not None:
-        return _reject(row, sem.reason_code, sem.errors, eid, rid)
+        return _reject(row, sem.reason_code, sem.errors, eid, rid, _link(obs.correction_of))
 
     flags: list[str] = []
     heading = rec.get("heading_rad")  # absent from writer schema revision 1
@@ -290,6 +292,10 @@ def prepare(row: Mapping[str, Any], writers: Mapping[int, Any], reference: Refer
         fingerprint=content_fingerprint(rec),
     )
     return Prepared(row, event, None, None, eid, rid)
+
+
+def _link(v: Any) -> str | None:
+    return str(v).lower() if v else None  # the canonical form of event ids
 
 
 def _s(v: Any) -> str | None:
@@ -535,6 +541,8 @@ def prepared_row(p: Prepared) -> dict[str, Any]:
     for name in _CANONICAL_FIELDS:
         value = getattr(e, name) if e is not None else None
         out[name] = list(value) if name == "quality_flags" and value is not None else value
+    if e is None:
+        out["correction_of"] = p.correction_of
     return out
 
 
@@ -551,4 +559,4 @@ def unflatten(flat: Mapping[str, Any]) -> Prepared:
         fields["quality_flags"] = tuple(fields["quality_flags"] or ())
         event = Canonical(event_id=flat["event_id"], robot_id=flat["robot_id"], **fields)
     return Prepared(row, event, flat["reason_code"], flat["errors"], flat["event_id"],
-                    flat["robot_id"])  # fmt: skip
+                    flat["robot_id"], flat["correction_of"])  # fmt: skip

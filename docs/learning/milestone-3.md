@@ -395,3 +395,52 @@ Six failures, none visible to the unit tests (spec §8 has the full table).
   Milestone 2's secrets file because it was started inside the checkout, where CI
   had just generated that file. Locally the file did not exist. The fix was to keep
   the container out of the directory, not to loosen the file's permissions.
+
+## 14. Incremental processing: the same answer for less work
+
+**Problem.** Rebuilding Silver from all of Bronze every ten minutes costs more each day,
+but an incremental update is easy to get subtly wrong.
+
+**Mechanism.** Write the update as U(S, ΔB, ΔR) and require it to equal the rebuild
+F(B + ΔB, R + ΔR). Then find the smallest set of rows a change can reach. Ours
+(`incremental.closure`) follows the rules of the set stage:
+* a record shares its fate with rows of the same `event_id` or correction link;
+* it can only be "late" relative to rows of its own robot with a greater ordering key,
+  which means its own boot or a later one.
+
+New arrivals never change what earlier arrivals saw, so older boots stay untouched.
+
+**Ours.**
+* `silver.telemetry_prepared` keeps the decoded rows, so nothing is decoded twice.
+* `silver.build_log` is the checkpoint.
+* The events of each touched robot are swapped from its first recomputed boot, in one
+  `MERGE ... WHEN NOT MATCHED BY SOURCE ... DELETE`.
+
+**Guarantees.** The Python reference and the Spark job both equal a full rebuild on
+randomized multi-batch corpora with duplicates, conflicts, corrections, late
+registrations, firmware changes and late-resolving schemas. Three deliberately wrong
+closures each fail some of those corpora, which shows the tests can catch an error.
+**Does not:** bound the work for a robot that never reboots. Its single boot keeps
+growing (ADR 0017).
+
+**Verify.** `tests/unit/test_lakehouse_incremental.py`,
+`test_spark_incremental_equals_full_on_a_random_corpus`.
+
+## 15. A dataset you can rebuild bit for bit
+
+**Problem.** "The training data" changes every time Silver changes, so a model trained
+last month cannot be explained.
+
+**Mechanism.**
+* Pin the inputs: the release reads one Silver build's snapshot and tags it (and every
+  other input) with `release-<id>`, so snapshot expiry keeps it.
+* Make the output a function of those inputs, with hash splits instead of random ones.
+* Record a content hash over the ordered rows.
+
+**Ours.** `jobs/release.py create` then `reproduce` recomputes from the tag and compares
+three hashes: recorded, stored and recomputed. `jobs/export.py` writes the same rows as
+Parquet with a manifest, checksums and a data card, and refuses to finish if the export
+does not hash to the release's content hash.
+
+**Verify.** `test_a_release_equals_the_reference_and_survives_newer_builds_and_expiry`,
+and Gate C (two exports with identical checksums).

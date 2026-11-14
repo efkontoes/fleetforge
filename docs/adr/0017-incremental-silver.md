@@ -1,8 +1,10 @@
 # ADR 0017: Incremental Silver must equal a full rebuild
 
-Status: accepted. The Python reference matches a full rebuild in 30 randomized
-multi-batch scenarios. On Spark, incremental builds match a Spark full rebuild and the
-Python reference over a three-batch random corpus.
+Status: accepted.
+* The Python reference matches a full rebuild in 30 randomized multi-batch scenarios,
+  and three deliberately wrong closures each fail some of them.
+* On Spark, incremental builds match a Spark full rebuild and the Python reference over
+  a three-batch random corpus.
 
 ## Context
 Slice 1 rebuilt Silver from all of Bronze every time (ADR 0014), so the cost grew with
@@ -23,11 +25,19 @@ an update from the previous state must give the same rows as a rebuild over the 
   * their model's firmware contract changed units (ΔR);
   * their schema id got a different archived answer, typically NOT_FOUND turning into
     FOUND (ADR 0016).
-* **Recompute the closure, not the table.** A record can only affect rows that share its
-  robot (slots, order), its `event_id` (duplicates, conflicts) or a correction link. The
-  build takes the changed rows and iterates to a fixed point over those keys. Robotless
-  rows (malformed, unresolved) are included by event id or by coordinates. Only that
-  scope goes through the set stage.
+* **Recompute the closure, not the table.** A record can only affect:
+  * rows that share its `event_id` (duplicates, conflicts) or a correction link;
+  * rows of its robot from its own boot on.
+
+  Earlier boots have smaller ordering keys, so they can never make a newer row late,
+  and a new arrival never changes what earlier arrivals saw. The build iterates to a
+  fixed point: a first boot per robot, and the link keys of that scope. Rows that were
+  prepared again count from boot 0, because their outcome may change what any later
+  arrival saw. A rejected prepared row keeps the `correction_of` it could read. Without
+  it, a correction that a firmware change turns into a rejection would drop its link,
+  and its old target would keep a stale `superseded_by` (found by Gate A, defect D9). Rows without a robot or boot are included by key or coordinates. Only
+  that scope goes through the set stage, and the events of each robot are swapped from
+  its first recomputed boot.
 * **Write order and atomicity.** The writes go in this order:
   1. Prepared rows MERGE by Kafka coordinates.
   2. Outcomes MERGE by coordinates.
@@ -40,8 +50,9 @@ an update from the previous state must give the same rows as a rebuild over the 
   Every step is idempotent, so a crash at any point is repaired by running the build
   again from the same checkpoint.
 * **Fall back to full.** A full rebuild runs when there is no base build, when
-  `TRANSFORM_VERSION` changed, or when it is requested with `--full`. Unchanged inputs
-  are a no-op.
+  `TRANSFORM_VERSION` changed, or when it is requested with `--full`. A build with no
+  new telemetry and unchanged reference and archive is a no-op, even when Bronze
+  committed an empty snapshot (a replay does that to record its checkpoint).
 * **One writer.** Silver has a single scheduled writer (Airflow, `max_active_runs=1`).
   A conflicting commit, from Iceberg's validation or our own snapshot check, is retried
   from the checkpoint up to three times.
@@ -55,11 +66,12 @@ an update from the previous state must give the same rows as a rebuild over the 
 | Delete then append | Two commits; a reader between them sees robots with no events |
 
 ## Consequences
-* The incremental build's cost is proportional to the scoped robots' prepared history,
-  not to all of Bronze. When every robot reports in every batch, the scope approaches all
-  prepared rows. That is still cheaper than a rebuild because nothing is decoded again,
-  but it is not O(ΔB). Seeding the set stage with per-key state would fix this and is
-  left as future work.
+* The incremental build's cost is proportional to the rows from each touched robot's
+  current boot onwards, not to all of Bronze. In Gate A's first run, without the boot
+  bound, a 62-row batch rebuilt 45,442 rows, because every robot reports in every
+  batch. The boot bound was added as the measured fix, and the second run's numbers
+  are in the execution ledger. A robot that never reboots still accumulates one long
+  boot; bounding that needs a per-robot summary row and is future work.
 * Old builds stay readable by the snapshot ids in the build log until snapshots expire.
   Releases pin theirs with tags.
 * Spark 4.1 cannot plan a MERGE whose source is a temp view that still reads an Iceberg

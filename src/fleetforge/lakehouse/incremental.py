@@ -1,8 +1,9 @@
 """Incremental Silver: recompute only what a change can reach (ADR 0017).
 
-A changed record can only affect rows that share its robot (slots, out-of-order order),
-its event_id (duplicates and conflicts) or a correction link, so the update recomputes
-the closure of those keys and must equal a full rebuild.
+A change reaches rows that share its event_id or a correction link, and rows of its
+robot from its boot on (a later boot has a greater ordering key, and a new arrival never
+alters what earlier arrivals saw). The update recomputes that closure and must equal a
+full rebuild.
 """
 
 from __future__ import annotations
@@ -54,27 +55,46 @@ def link_keys(rows: Iterable[Mapping[str, Any]]) -> set[str]:
     return {k for r in rows for k in (r["event_id"], r["correction_of"]) if k}
 
 
-def closure(rows: list[Mapping[str, Any]], changed: list[Mapping[str, Any]]) -> tuple[set, set]:
-    """Robots and link keys the set stage must recompute for the changed rows."""
-    robots = {r["robot_id"] for r in changed if r["robot_id"]}
+def closure(rows: list[Mapping[str, Any]], changed: list[Mapping[str, Any]],
+            whole: set[str]) -> tuple[dict[str, int], set[str]]:  # fmt: skip
+    """Per robot the first boot to recompute, and the link keys of that scope.
+
+    `whole` lists robots whose every row must be recomputed (re-prepared rows can change
+    what later arrivals of any boot saw).
+    """
+    bounds = dict.fromkeys(whole, 0)
+
+    def lower(robot: str | None, boot: int | None) -> bool:
+        if robot is None or boot is None or boot >= bounds.get(robot, boot + 1):
+            return False
+        bounds[robot] = boot
+        return True
+
+    for r in changed:
+        lower(r["robot_id"], r["boot"])
     while True:
-        keys = link_keys(changed) | link_keys(r for r in rows if r["robot_id"] in robots)
-        linked = {r["robot_id"] for r in rows if r["robot_id"]
-                  and (r["event_id"] in keys or r["correction_of"] in keys)}  # fmt: skip
-        if linked <= robots:
-            return robots, keys
-        robots |= linked
+        scoped = [r for r in rows if in_bounds(r, bounds)]
+        keys = link_keys(changed) | link_keys(scoped)
+        grew = [lower(r["robot_id"], r["boot"]) for r in rows
+                if r["event_id"] in keys or r["correction_of"] in keys]  # fmt: skip
+        if not any(grew):
+            return bounds, keys
 
 
-def in_scope(row: Mapping[str, Any], robots: set, keys: set, changed: set) -> bool:
-    if row["robot_id"]:
-        return row["robot_id"] in robots
-    return row["event_id"] in keys or row["coords"] in changed
+def in_bounds(row: Mapping[str, Any], bounds: Mapping[str, int]) -> bool:
+    b = bounds.get(row["robot_id"])
+    return b is not None and row["boot"] is not None and row["boot"] >= b
+
+
+def in_scope(row: Mapping[str, Any], bounds: Mapping[str, int], keys: set, changed: set) -> bool:
+    return (in_bounds(row, bounds) or row["coords"] in changed or row["event_id"] in keys
+            or row["correction_of"] in keys)  # fmt: skip
 
 
 def keys_of(p: Prepared) -> dict[str, Any]:
     return {"coords": coordinates(p.row), "robot_id": p.robot_id, "event_id": p.event_id,
-            "correction_of": p.event.correction_of if p.event else None}  # fmt: skip
+            "boot": p.event.boot_number if p.event else None,
+            "correction_of": p.event.correction_of if p.event else p.correction_of}  # fmt: skip
 
 
 @dataclass
@@ -108,14 +128,17 @@ def update(state: SilverState, new_bronze: list[dict], reference: Reference,
 
     rows = [keys_of(p) for p in state.prepared.values()]
     changed_set = set(changed)
-    robots, keys = closure(rows, [r for r in rows if r["coords"] in changed_set])
+    whole = {state.prepared[c].robot_id for c in redo if state.prepared[c].robot_id}
+    bounds, keys = closure(rows, [r for r in rows if r["coords"] in changed_set], whole)
     scope = [p for p, r in zip(state.prepared.values(), rows, strict=True)
-             if in_scope(r, robots, keys, changed_set)]  # fmt: skip
+             if in_scope(r, bounds, keys, changed_set)]  # fmt: skip
     result = build(scope, build_id=build_id)
     for o in result.outcomes:
         state.outcomes[coordinates(o)] = o
-    state.events = {e: row for e, row in state.events.items() if row["robot_id"] not in robots}
+    state.events = {e: row for e, row in state.events.items()
+                    if not in_bounds({"robot_id": row["robot_id"], "boot": row["boot_number"]},
+                                     bounds)}  # fmt: skip
     state.events.update({e["event_id"]: e for e in result.events})
     state.reference, state.archive = reference, list(archive)
-    return {"new": len(new_bronze), "reprepared": len(redo), "robots": len(robots),
+    return {"new": len(new_bronze), "reprepared": len(redo), "robots": len(bounds),
             "scope": len(scope)}  # fmt: skip

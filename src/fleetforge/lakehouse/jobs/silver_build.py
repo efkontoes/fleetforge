@@ -6,16 +6,16 @@ python -m fleetforge.lakehouse.jobs.silver_build [--full]
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import math
-import sys
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from fleetforge.lakehouse import ops
 from fleetforge.lakehouse.bronze import CONFLUENT
 from fleetforge.lakehouse.incremental import reference_changes, schema_changes
+from fleetforge.lakehouse.jobs import exits
 from fleetforge.lakehouse.jobs.common import (
     current_snapshot_id,
     ensure_tables,
@@ -303,16 +303,20 @@ class ConcurrentWrite(RuntimeError):
     """Another writer committed to a Silver table while this build ran."""
 
 
-def replace_robots(spark: SparkSession, df: DataFrame, robots: list[str], base: int | None) -> None:
-    """Swap the events of `robots` in one row-level commit, refusing if someone wrote meanwhile."""
+def replace_scope(spark: SparkSession, df: DataFrame, bounds: dict[str, int],
+                  base: int | None) -> None:  # fmt: skip
+    """Swap the events of each robot from its first recomputed boot, in one row-level commit."""
     if current_snapshot_id(spark, SILVER_TELEMETRY_EVENTS) != base:
         raise ConcurrentWrite("silver.telemetry_events changed during the build")
     df.createOrReplaceTempView("_src_events")
-    listed = ", ".join("'" + r.replace("'", "''") + "'" for r in robots)
+    scope = " OR ".join(
+        "(t.robot_id = '" + r.replace("'", "''") + f"' AND t.boot_number >= {int(b)})"
+        for r, b in sorted(bounds.items())
+    )
     spark.sql(f"MERGE INTO {fq(SILVER_TELEMETRY_EVENTS)} t USING _src_events s "
               "ON t.event_id = s.event_id "
               "WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT * "
-              f"WHEN NOT MATCHED BY SOURCE AND t.robot_id IN ({listed}) THEN DELETE")  # fmt: skip
+              f"WHEN NOT MATCHED BY SOURCE AND ({scope}) THEN DELETE")  # fmt: skip
 
 
 def link_keys(df: DataFrame) -> DataFrame:
@@ -322,30 +326,40 @@ def link_keys(df: DataFrame) -> DataFrame:
     return ids.union(df.select(F.col("correction_of").alias("k"))).where("k IS NOT NULL")
 
 
-def scope_of(prepared: DataFrame, changed: DataFrame) -> tuple[list[str], DataFrame]:
-    """Spark mirror of incremental.closure(): robots to recompute and the rows they need."""
+def scope_of(prepared: DataFrame, changed: DataFrame,
+             whole: set[str]) -> tuple[dict[str, int], DataFrame]:  # fmt: skip
+    """Spark mirror of incremental.closure(): first boot per robot, and the rows to rebuild."""
+    from pyspark.sql import Window
     from pyspark.sql import functions as F
 
-    def robots_of(df: DataFrame) -> set[str]:
-        return {
-            r[0] for r in df.where("robot_id IS NOT NULL").select("robot_id").distinct().collect()
-        }
+    spark = prepared.sparkSession
+    bounds = dict.fromkeys(whole, 0)
 
-    robots = robots_of(changed)
+    def lower(df: DataFrame) -> bool:
+        rows = (df.where("robot_id IS NOT NULL AND boot_number IS NOT NULL")
+                .groupBy("robot_id").agg(F.min("boot_number")).collect())  # fmt: skip
+        grew = [r[0] for r in rows if r[1] < bounds.get(r[0], r[1] + 1)]
+        bounds.update({r[0]: r[1] for r in rows if r[0] in grew})
+        return bool(grew)
+
+    def in_bounds() -> DataFrame:
+        b = spark.createDataFrame(list(bounds.items()) or [("", 0)], "robot_id STRING, lo BIGINT")
+        hit = prepared.join(F.broadcast(b), "robot_id").where(F.col("boot_number") >= F.col("lo"))
+        return hit.select(*prepared.columns)
+
+    lower(changed)
     while True:
-        mine = prepared.where(F.col("robot_id").isin(sorted(robots)))
+        mine = in_bounds()
         keys = link_keys(changed).union(link_keys(mine)).distinct()
         linked = prepared.join(keys, prepared.event_id == keys.k, "left_semi").union(
             prepared.join(keys, prepared.correction_of == keys.k, "left_semi"))  # fmt: skip
-        grown = robots | robots_of(linked)
-        if grown == robots:
+        if not lower(linked):
             break
-        robots = grown
-    robotless = prepared.where("robot_id IS NULL")
-    by_key = robotless.join(keys, robotless.event_id == keys.k, "left_semi")
-    by_coords = robotless.join(changed.select(*COORDS), list(COORDS), "left_semi")
-    scope = mine.unionByName(by_key).unionByName(by_coords.join(by_key, list(COORDS), "left_anti"))
-    return sorted(robots), scope
+    by_coords = prepared.join(changed.select(*COORDS), list(COORDS), "left_semi")
+    extra = linked.unionByName(by_coords).join(mine.select(*COORDS), list(COORDS), "left_anti")
+    once = Window.partitionBy(*COORDS).orderBy(*COORDS)
+    extra = extra.withColumn("_n", F.row_number().over(once)).where("_n = 1").drop("_n")
+    return bounds, mine.unionByName(extra)
 
 
 def reference_at(bronze: DataFrame, topics: dict[str, str]) -> Reference:
@@ -406,6 +420,12 @@ def build_silver(
     if base is not None and inputs == (base["bronze_snapshot_id"], base["reference_fingerprint"],
                                        base["archive_fingerprint"]):  # fmt: skip
         return {"status": "unchanged", "build_id": base["build_id"]}
+    same_reference = base is not None and (ref_fp, archive_fp) == (
+        base["reference_fingerprint"], base["archive_fingerprint"])  # fmt: skip
+    newer = F.col("ingested_at") > F.lit(base["bronze_max_ingested_at"]) if base else None
+    if same_reference and telemetry.where(newer).isEmpty():
+        # Bronze moved (e.g. an empty replay commit) but nothing Silver reads changed.
+        return {"status": "unchanged", "build_id": base["build_id"], "bronze_snapshot_id": snap}
 
     if base is None:
         mode, bid, reprepared = "FULL", build_id(int(snap), ref_fp, archive_fp), 0
@@ -440,13 +460,16 @@ def build_silver(
         write_replace(
             spark, conform(changed, SILVER_TELEMETRY_PREPARED), SILVER_TELEMETRY_PREPARED, {}
         )
-        robots, scope = None, changed
+        bounds, scope = {}, changed
     else:
         merge_by_coords(
             spark, conform(changed, SILVER_TELEMETRY_PREPARED), SILVER_TELEMETRY_PREPARED
         )
         fault("after_prepared")
-        robots, scope = scope_of(spark.table(fq(SILVER_TELEMETRY_PREPARED)), changed)
+        old = F.col("ingested_at") <= F.lit(base["bronze_max_ingested_at"])
+        reprepared_robots = changed.where(old & F.col("robot_id").isNotNull()).select("robot_id")
+        whole = {r[0] for r in reprepared_robots.distinct().collect()} if reprepared else set()
+        bounds, scope = scope_of(spark.table(fq(SILVER_TELEMETRY_PREPARED)), changed, whole)
     scope = scope.localCheckpoint()
     scope_rows = scope.count()
     events, outcomes = set_stage(scope, bid)
@@ -459,9 +482,9 @@ def build_silver(
     else:
         merge_by_coords(spark, outcomes, SILVER_TELEMETRY_RECORD_OUTCOMES)
         fault("before_events")
-        if robots:
-            replace_robots(spark, events, robots, events_base)
-        scope_robots = len(robots)
+        if bounds:
+            replace_scope(spark, events, bounds, events_base)
+        scope_robots = len(bounds)
     fw, regs = reference_rows(ref, bid)
     for rows, table in ((fw, SILVER_FIRMWARE_CONTRACTS), (regs, SILVER_ROBOT_REGISTRY)):
         write_replace(spark, spark.createDataFrame(rows, table.spark_schema()), table, {})
@@ -512,7 +535,7 @@ def build_with_retry(spark: SparkSession, attempts: int = 3, **kwargs: Any) -> d
     raise AssertionError("unreachable")
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> dict[str, Any]:
     import argparse
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -527,9 +550,21 @@ def main(argv: list[str] | None = None) -> int:
             bronze_snapshot=args.bronze_snapshot, telemetry_topic=lake.telemetry_topic,
             reference_topics={"firmware": lake.firmware_topic, "robots": lake.robot_events_topic},
         )  # fmt: skip
-    print(json.dumps(report, default=str))
-    return 0
+    if report["status"] == "built":
+        report["lineage"] = lineage(report)
+    return report
+
+
+def lineage(report: dict[str, Any]) -> dict[str, list]:
+    tables = ((SILVER_TELEMETRY_PREPARED, "prepared_snapshot_id"),
+              (SILVER_TELEMETRY_RECORD_OUTCOMES, "outcomes_snapshot_id"),
+              (SILVER_TELEMETRY_EVENTS, "events_snapshot_id"))  # fmt: skip
+    return {
+        "inputs": [ops.table(BRONZE_KAFKA_RECORDS.qualified, report["bronze_snapshot_id"]),
+                   ops.table(BRONZE_REGISTRY_SCHEMAS.qualified, report["archive_snapshot_id"])],
+        "outputs": [ops.table(t.qualified, report[k]) for t, k in tables],
+    }  # fmt: skip
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    exits.run(main)

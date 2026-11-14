@@ -84,3 +84,8 @@ lake-gate-a-trino:  ## Gate A's Trino half: dbt Gold, frozen final days, reopen
 	$(GATE_DBT) run --vars '$(GATE_REOPEN)'
 	$(GATE_TRINO) --stage reopened
 	$(GATE_DBT) test --vars '$(GATE_VARS)'
+
+lake-gate-c:  ## Gate C: export a Gate A release, train and register twice, check drift
+	$(LAKE) --profile query stop trino
+	docker build -q -f infrastructure/ml/Dockerfile -t fleetforge-ml:dev .
+	sh scripts/gate_c.sh

@@ -69,6 +69,15 @@ def test_incremental_equals_full_rebuild(seed, runs):
     assert_equivalent(state, full_build(bronze, corpus.archives[-1]))
 
 
+@pytest.mark.parametrize(("seed", "robots", "runs"), [(6, 10, 4), (85, 16, 3), (93, 6, 3)])
+def test_a_reprepared_row_still_reaches_what_its_old_links_reached(seed, robots, runs):
+    # A correction re-prepared into a rejection drops its link; its old target must change too.
+    corpus = fx.random_corpus(seed, robots=robots, runs=runs)
+    bronze = fx.corpus_bronze(corpus)
+    state, _ = run_incremental(bronze, corpus.archives)
+    assert_equivalent(state, full_build(bronze, corpus.archives[-1]))
+
+
 def test_the_corpus_exercises_every_kind_of_change():
     seen = set()
     for seed in range(10):

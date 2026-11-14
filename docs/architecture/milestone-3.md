@@ -139,8 +139,10 @@ insert-if-absent by identity, a fail-closed planner, and a single-writer lease.
 
 ### Silver: validated canonical telemetry
 
-Silver = F(Bronze snapshot, reference data, `TRANSFORM_VERSION`), rebuilt in
-full in slice 1 (ADR 0014). Two stages:
+Silver = F(Bronze snapshot, reference data, schema archive, `TRANSFORM_VERSION`)
+(ADR 0014). It is built incrementally from the checkpoint in `silver.build_log`, and
+the update must equal a full rebuild over the same inputs (ADR 0017, see
+"Incremental Silver" below). Two stages:
 
 **Row stage** (`silver.prepare`, runs in `mapInPandas`), in order. The first
 failure decides the reason:
@@ -148,7 +150,7 @@ failure decides the reason:
 | Step | Rule | Outcome | Rule source |
 |---|---|---|---|
 | framing | Confluent-framed Avro | `MALFORMED_PAYLOAD` | M2 codec |
-| schema | id archived; `NOT_FOUND` → reject; **not archived → job aborts** (recoverable, never a quarantine) | `MALFORMED_PAYLOAD` / abort | M2 codec 404 rule |
+| schema | id archived; `NOT_FOUND` → `UNRESOLVED` (retry-eligible, never malformed, ADR 0016); **not archived → job aborts** (recoverable, never a quarantine) | `UNRESOLVED_SCHEMA_ID` / abort | ADR 0016 |
 | decode | writer-schema decode succeeds | `MALFORMED_PAYLOAD` | M2 codec |
 | contract | required fields, `schema_version = 1`, finite numbers, seq ≥ 0, boot ≥ 1 | `MISSING_FIELD`, `UNSUPPORTED_SCHEMA_VERSION`, `INVALID_FIELD` | M2 `observation_from_record`, unchanged |
 | reference | robot model known (G1); firmware contract for (model, version) | `UNKNOWN_ROBOT`, `UNKNOWN_FIRMWARE` (both retry-eligible) | M2 taxonomy |
@@ -160,7 +162,8 @@ failure decides the reason:
 "First" always means first in Bronze arrival order
 `(ingested_at, kafka_topic_id, kafka_partition, kafka_offset)`:
 
-1. Rejections from the row stage keep their reason.
+1. Rejections from the row stage keep their reason. An unresolved schema id is the
+   outcome `UNRESOLVED`, counted apart from `REJECTED`.
 2. Per `event_id`: the first copy is the representative. A later copy with the same
    content fingerprint (business fields, excluding producer metadata and schema
    revision) is a `DUPLICATE`; with different content, `EVENT_ID_CONFLICT`.
@@ -190,21 +193,66 @@ bytes. A new business major version (`schema_version = 2`) is
 `UNSUPPORTED_SCHEMA_VERSION` until Silver implements it, and then a rebuild applies
 it to history.
 
-### Gold: data products (specified; slice 3)
+### Incremental Silver (ADR 0017)
 
-1. **Fleet telemetry and operational quality.**
-   `gold.robot_daily_telemetry` (robot × observed day: events, expected vs missing
-   sequences, out-of-order, duplicates, corrections, battery, distance over
-   consecutive steps only, lidar faults, `is_final`) and
-   `gold.pipeline_daily_quality` (ingest day × topic × outcome × reason).
-   Late arrivals: a Silver build reports the observed days it changed. Gold
-   recomputes exactly those days. Days older than the allowed lateness (7 days,
-   Kafka retention) are `is_final`.
-2. **Training-candidate robot state observations.**
-   `gold.robot_state_observations` + `gold.training_dataset_releases`: stable ids
-   (`observation_id` = current Silver event id), provenance (Kafka coordinates,
-   Silver build), deterministic leakage-safe split by episode
-   (`hash(episode_id, seed)`), immutable releases with a content hash.
+* `silver.telemetry_prepared` keeps every row-stage result, so a record is decoded
+  once and again only when its inputs change.
+* `silver.build_log` is the checkpoint, with one row per published build. ΔB is
+  Bronze telemetry newer than the base build's largest `ingested_at`.
+* Rows are prepared again when their robot's registration changed, when their model's
+  firmware contract changed units, or when their schema id got a different archived
+  answer.
+* The set stage runs only on the closure of the changed rows: their robots, event ids
+  and correction links, iterated to a fixed point. Robotless rows are included by
+  event id or by coordinates.
+* Writes go in this order: prepared MERGE, outcomes MERGE, one row-level MERGE that
+  swaps the scoped robots' events, the reference tables, and last the build-log row.
+  Each step is idempotent, so a crash anywhere is repaired by running again.
+* A stale writer is detected by comparing the events table's snapshot with the one
+  the build read. Iceberg validates the window after that. Either way the build is
+  retried from the checkpoint.
+* A full rebuild runs when there is no base build, the rule version changed, or
+  `--full` is given.
+* The build tags the Bronze and archive snapshots it read (`silver-base`), so snapshot
+  expiry cannot remove the next build's inputs.
+
+### Gold: data products (ADR 0018)
+
+1. **Fleet telemetry and operational quality** (dbt on Trino, `dbt/models/gold`).
+   Every model reads Silver at the snapshots of one build (`silver.build_log`, var
+   `silver_build_id`, newest by default), never "whatever is current".
+   * `gold.robot_daily_telemetry` (robot × observed day):
+     * completeness is counted by distinct positions;
+     * missing sequences are counted between consecutive observed positions of a
+       boot, on the day of the later one, so a gap across midnight is not lost;
+     * distance is summed only over consecutive sequence numbers with non-decreasing
+       `observed_at`.
+   * `is_final` is a policy, not a guess. A row is final when it is older than 14 days
+     before the newest ingestion and its robot has no open retry-eligible record. An
+     unreadable record counts for the robot of its Kafka key; one with no key blocks
+     every robot. Final rows are frozen: later runs leave them alone unless they are
+     reopened (`reopen`, or `reopen_from`/`reopen_to`).
+   * `gold.pipeline_daily_quality` (ingest day × topic × outcome × reason).
+   * `gold.pipeline_daily_rates` with explicit denominators:
+     `bronze_records = classified + unresolved`, and rates are taken over classified
+     records only (NULL when there are none).
+2. **Training-candidate robot state observations** (Spark release job,
+   `jobs/release.py`).
+   * `gold.robot_state_observations` holds current Silver events of one pinned build:
+     * `observation_id` is the current event id;
+     * an episode is a boot (gap G7);
+     * `dt` and velocities are finite differences only over consecutive steps with
+       positive dt; otherwise they are NULL with `NO_PREVIOUS_STEP`, `SEQUENCE_GAP`
+       or `NON_POSITIVE_DT`;
+     * no actions are invented.
+   * Two hash splits: `split` by episode and the stricter `split_robot` by robot.
+   * `gold.training_dataset_releases` records the build, the snapshots of every input,
+     the seed and a SHA-256 over the ordered rows. The release tags each input snapshot
+     (`release-<id>`), so maintenance cannot expire them.
+   * A release id is immutable. Rerunning with the same inputs returns it; other
+     inputs are refused. A crash before the release row is written is cleaned up on
+     retry. `reproduce` recomputes from the pinned snapshot and compares three hashes:
+     the recorded one, the stored rows and the recomputation.
 
 **Why passing SQL validation does not make it training-ready.** A release stays
 `CANDIDATE` until, at minimum:
