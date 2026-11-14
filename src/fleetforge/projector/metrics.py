@@ -14,6 +14,11 @@ QUARANTINED = Counter(
     "Records quarantined as permanent data errors, by reason",
     ["reason"],
 )
+PARKED = Counter(
+    "fleetforge_projector_parked_total",
+    "Records parked because the registry kept answering 404 for their schema id",
+    ["reason"],
+)
 BATCH_SIZE = Histogram(
     "fleetforge_projector_batch_size",
     "Records per processed batch",

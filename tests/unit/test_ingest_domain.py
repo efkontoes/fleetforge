@@ -168,10 +168,10 @@ class TestRegistryOutageClassification:
             dec.decode(framed)
         assert is_recoverable(RegistryUnavailable("x"))
         dec = TelemetryDecoder(FailingClient(SchemaRegistryError(404, 40403, "not found")), "t")
-        with pytest.raises(DecodeError):
-            dec.decode(framed)  # registry holds our subject: the id really is unknown
+        with pytest.raises(RegistryUnavailable):
+            dec.decode(framed)  # ADR 0016: a listed subject does not prove an id is unknown
         # A registry that is up but still loading its store (Apicurio KafkaSQL) answers
-        # 404 for existing ids and cannot confirm our subject: never permanent.
+        # 404 for existing ids: never permanent.
         not_loaded = FailingClient(SchemaRegistryError(404, 40403, "not found"), subjects=())
         with pytest.raises(RegistryUnavailable):
             TelemetryDecoder(not_loaded, "t").decode(framed)
@@ -247,8 +247,10 @@ class TestDecoderEquivalence:
         for body in [b"", b"\x02", b"\xff" * 3]:
             with pytest.raises(DecodeError):
                 dec.decode(framed + body)
-        with pytest.raises(DecodeError):
-            dec.decode(b"\x00\x00\x00\x27\x0f" + b"x")  # unknown schema id
+        from fleetforge.kafka.codec import RegistryUnavailable
+
+        with pytest.raises(RegistryUnavailable):  # unknown schema id: held, never malformed
+            dec.decode(b"\x00\x00\x00\x27\x0f" + b"x")
 
 
 class TestKafkaRetry:

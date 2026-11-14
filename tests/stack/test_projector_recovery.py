@@ -236,3 +236,49 @@ def test_registry_outage_pauses_projection_and_never_quarantines(fresh_topic, st
     record_property("registry_outage_s", round(up_at - down_at, 1))
     record_property("retries", p.stats.retries)
     record_property("projected_after_registry_back_s", round(drained, 1))
+
+
+@pytest.mark.disruptive
+def test_registry_restart_never_turns_valid_events_into_malformed(fresh_topic, record_property):
+    """ADR 0016. Decode a valid event continuously, with a cold decoder each time (as a
+    starting projector does), while the real registry restarts three times. Before the
+    fix, a connection reset from confluent-kafka's httpx2 client during the restart was
+    classified as bad data (reproduced: 1 permanent DecodeError in 150 decodes over 6
+    restarts). A valid event may only ever be retried, never judged malformed or parked."""
+    import json
+    from collections import Counter
+
+    from fleetforge.kafka.codec import (
+        DecodeError,
+        RegistryUnavailable,
+        SchemaUnresolved,
+        TelemetryDecoder,
+        TelemetryEncoder,
+        avro_record_from_payload,
+    )
+    from fleetforge.kafka.schemas import registry_client
+
+    tel = next(i for i in generate(SimConfig(seed=11, robots=1, ticks=2))
+               if isinstance(i, Telemetry))  # fmt: skip
+    rec = avro_record_from_payload(json.loads(tel.body()), boot_number=1,
+                                   firmware_version="1.0.0", producer_id="restart-test")  # fmt: skip
+    value = TelemetryEncoder(registry_client(REGISTRY), fresh_topic).encode(rec)
+    outcomes: Counter = Counter()
+    for _ in range(3):
+        compose("restart", "schema-registry")
+        deadline, ok_in_a_row = time.monotonic() + 120, 0
+        while ok_in_a_row < 10 and time.monotonic() < deadline:
+            try:
+                TelemetryDecoder(registry_client(REGISTRY), fresh_topic).decode(value)
+                outcomes["decoded"] += 1
+                ok_in_a_row += 1
+            except RegistryUnavailable:
+                outcomes["held"] += 1
+                ok_in_a_row = 0
+            except (DecodeError, SchemaUnresolved) as exc:
+                outcomes[f"WRONG {type(exc).__name__}: {exc}"] += 1
+            time.sleep(0.03)
+        assert ok_in_a_row == 10, "registry did not come back within 120 s"
+    record_property("outcomes", dict(outcomes))
+    assert outcomes["held"] > 0  # the outage window was really exercised
+    assert set(outcomes) == {"decoded", "held"}, outcomes

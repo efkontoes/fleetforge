@@ -148,3 +148,60 @@ def _correction_id(db, original):
             " ORDER BY requested_at LIMIT 1"
         )
         return c.execute(sql, {"e": original}).scalar_one()
+
+
+class _RestartingRegistry:
+    """Answers 404 for every schema id, like Apicurio while it reloads its store."""
+
+    def get_schema(self, schema_id):
+        from confluent_kafka.schema_registry.error import SchemaRegistryError
+
+        raise SchemaRegistryError(404, 40403, "Schema not found")
+
+
+def test_unresolved_schema_is_parked_durably_then_replayed(db, codec, replayer):
+    """ADR 0016 invariant: a registry that keeps answering 404 parks valid events, with
+    bytes and coordinates committed together with the ledger advance; they never enter
+    the malformed quarantine, and replay applies them once the registry answers."""
+    from fleetforge.kafka.codec import TelemetryDecoder
+
+    encoder, _ = codec
+    robot, boot = uuid.uuid4(), uuid.uuid4()
+    register(db, robot, boot)
+    good_id, good = value(encoder, robot, boot, 1)
+    bad_id, bad = value(encoder, robot, boot, 2, battery=150.0)  # a real data error
+    blind = TelemetryDecoder(_RestartingRegistry(), TOPIC, unresolved_hold_s=0)
+    recs = [SourceRecord(TOPIC, 0, 7, good), SourceRecord(TOPIC, 0, 8, bad)]
+    BatchProcessor(db, blind, consumer_group="parking").process(recs)
+
+    with db.connect() as c:
+        rows = c.execute(text(
+            "SELECT reason_code, error_category, status, retry_eligible, payload_bytes,"
+            " source_partition, source_offset FROM fleet.telemetry_rejections"
+            " WHERE source = 'kafka' ORDER BY source_offset")).mappings().all()  # fmt: skip
+        in_quarantine_view = c.execute(text(
+            "SELECT count(*) FROM fleet.telemetry_quarantine")).scalar_one()  # fmt: skip
+        ledger = c.execute(text(
+            "SELECT next_offset FROM fleet.consumer_offsets WHERE consumer_group = 'parking'"
+        )).scalar_one()  # fmt: skip
+    parked = ("UNRESOLVED_SCHEMA_ID", "UNRESOLVED", "PARKED", True)
+    assert [(r["reason_code"], r["error_category"], r["status"], r["retry_eligible"])
+            for r in rows] == [parked, parked]  # fmt: skip
+    assert [(bytes(r["payload_bytes"]), r["source_partition"], r["source_offset"])
+            for r in rows] == [(good, 0, 7), (bad, 0, 8)]  # fmt: skip
+    assert in_quarantine_view == 0  # parked is not "invalid data"
+    assert ledger == 9  # advanced past both, backed by the durable rows above
+    assert state(db, robot) is None
+
+    out = replayer.quarantined("UNRESOLVED_SCHEMA_ID", 100, dry_run=False)
+    assert out["outcomes"] == {"APPLIED/-": 1, "REJECTED/BATTERY_OUT_OF_RANGE": 1}
+    assert str(state(db, robot)["event_id"]) == good_id
+    with db.connect() as c:
+        statuses = dict(c.execute(text(
+            "SELECT source_offset, status FROM fleet.telemetry_rejections"
+            " WHERE source = 'kafka'")).all())  # fmt: skip
+        verdict = c.execute(text(
+            "SELECT reason_code FROM fleet.telemetry_rejections WHERE event_id = :e"
+            " AND source = 'replay'"), {"e": bad_id}).scalar_one()  # fmt: skip
+    assert statuses == {7: "REPLAYED", 8: "RESOLVED"}  # nothing left parked
+    assert verdict == "BATTERY_OUT_OF_RANGE"  # the real error, judged with the schema

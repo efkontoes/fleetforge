@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     projector_flush_interval_s: float = 0.2
     projector_metrics_port: int = 9101
     projector_max_retry_backoff_s: float = 10.0
+    # A schema id the registry answers 404 for is treated as an outage for this long
+    # (batch retried, offsets held), then the record is parked (ADR 0016).
+    projector_schema_unresolved_hold_s: float = 120.0
     consumer_rejoin_timeout_s: float = 120.0
 
 
