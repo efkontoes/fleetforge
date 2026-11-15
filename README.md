@@ -17,6 +17,9 @@ tracked baseline model from the same Kafka log.
 | 5 | Reproducible dataset export, synthetic-label baseline and boosted model, MLflow, drift | done |
 | 6 | AWS Terraform (planned and scanned, never applied), security, backup and restore test, cost model, CLI, final validation | done |
 
+Release `v1.0.0` (2026-11-15) is the merge of all six milestones on `main`. One problem is
+still open: a producer stall seen twice in CI ([#7](https://github.com/efkontoes/fleetforge/issues/7)).
+
 ## Architecture (Milestone 2)
 
 ```
@@ -94,11 +97,16 @@ src/fleetforge/
   projector/        telemetry projector, mission consumer, replay
   simulator/        fleet model, faults, HTTP sender, Kafka publisher, oracle
   ops/              role provisioning, ops exporter, retention
+  lakehouse/        table specs, Bronze, Silver, Gold reference; jobs/ for Spark entry points
+  ml/               dataset export, training, drift
+  cli.py            the fleetforge command
 database/migrations/   0001-0008, hand-written SQL
-infrastructure/        Kafka topics, Debezium connectors, Prometheus, Grafana
-tests/{unit,integration,failure,stack}/
+dbt/                   Gold models and data tests on Trino
+infrastructure/        Kafka, Debezium, Prometheus, Grafana, lakehouse, Airflow, ML, Terraform
+scripts/               gates A-C, end-to-end, freshness, DR and cost scripts
+tests/{unit,integration,failure,stack,lakehouse,ml}/
 benchmarks/            harnesses, raw results, reports
-docs/                  architecture, ADRs 0001-0011, learning notes, runbook, reviews
+docs/                  architecture, ADRs 0001-0021, learning notes, runbooks, reviews
 ```
 
 ## Lakehouse (Milestone 3)
@@ -144,11 +152,12 @@ fleetforge down
 
 Gate B (Airflow under six injected faults) needs about 5.5 GiB, so it runs on a CI runner:
 add the label `gate-b` (Gate B only) or `full-system` (all three gates) to a pull request,
-or dispatch the `full-system` workflow. It passed in CI run 43664801824: six faults,
-every DAG run recovered, and reconciliation passed 11/11.
+or dispatch the `full-system` workflow. For the release it passed in CI run 43704310730:
+every fault was followed by the retry it should cause, including a registry outage at a
+real schema lookup, and reconciliation passed 11/11.
 
 ## Documentation
-* [Execution ledger](docs/reviews/platform-execution.md) (defects D1–D18, optimisations) ·
+* [Execution ledger](docs/reviews/platform-execution.md) (defects D1–D20, optimisations) ·
   [fault matrix](docs/reviews/fault-matrix.md) ·
   [lakehouse runbook](docs/operations/lakehouse-runbook.md) ·
   [security](docs/operations/security.md) ·

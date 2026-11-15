@@ -1,6 +1,7 @@
 # FleetForge: final engineering report
 
-Date: 2026-11-14. Scope: Milestones 3–6 on top of the audited Milestone 2 platform.
+Date: 2026-11-15, release `v1.0.0`. Scope: Milestones 3–6 on top of the audited Milestone 2
+platform.
 Every number below comes from a run that happened on this code. Where a run was not
 possible, the report says so.
 
@@ -19,17 +20,17 @@ The analytical path agrees with an independent oracle at every level tested:
 The operational path still holds 5,000 events/s for 5 minutes (p99 388 ms) and absorbs
 10,000 events/s.
 
-Final validation found and fixed 18 defects (D1–D18) and three measured bottlenecks
+Final validation found and fixed 20 defects (D1–D20) and three measured bottlenecks
 (P1–P3). Nothing was provisioned in AWS: the Terraform is planned and scanned, never
 applied.
 
 ## 2. What was delivered
-| Milestone | Delivered | PR |
+| Milestone | Delivered | PR (merge on main) |
 |---|---|---|
-| 3 Lakehouse | incremental Silver with checkpoint, dbt Gold on Trino, immutable tagged releases, maintenance, reconciliation, job runner with retry-aware exit codes, OpenLineage records, exporter and alerts | #2 |
-| 4 Orchestration | Airflow 3.3, four DAGs running jobs as containers through a restricted socket proxy, writer pool, Gate B | #4 |
-| 5 ML | reproducible Parquet export with manifest, checksums and data card; synthetic label; baseline and boosted model; MLflow; drift | #5 |
-| 6 Operations | Terraform (planned, scanned), security comparison, backup and restore test, AWS prices and cost model, CLI, final validation | #6 |
+| 3 Lakehouse | incremental Silver with checkpoint, dbt Gold on Trino, immutable tagged releases, maintenance, reconciliation, job runner with retry-aware exit codes, OpenLineage records, exporter and alerts | #2 (`6b6c028`) |
+| 4 Orchestration | Airflow 3.3, four DAGs running jobs as containers through a restricted socket proxy, writer pool, Gate B | #4 (`a5d1953`) |
+| 5 ML | reproducible Parquet export with manifest, checksums and data card; synthetic label; baseline and boosted model; MLflow; drift | #5 (`bd3c169`) |
+| 6 Operations | Terraform (planned, scanned), security comparison, backup and restore test, AWS prices and cost model, CLI, final validation | #6 (`21da3b7`) |
 
 The optional LLM assistant was not built; nothing depends on it.
 
@@ -99,30 +100,36 @@ Gold, a Spark job owns releases, and Airflow only orders and retries.
 * A scheduled maintenance run went end to end through the scheduler, the socket proxy
   and Spark job containers. Its first attempts found two real defects: a V0 JDBC
   catalog (D10) and a lake with no build (D11).
-* **Gate B passed** on a CI runner (run 43664801824, 31 minutes), because it needs
-  about 5.5 GiB and this machine has 3.7 GiB:
+* **Gate B passed** on a CI runner (run 43704310730, 31 minutes, the release commit of
+  PR #8), because it needs about 5.5 GiB and this machine has 3.7 GiB:
 
   | Scenario | Result | Attempts where the fault hit |
   |---|---|---|
   | baseline (2,009 records) | success | all tasks 1 |
   | repeat a completed run | success | all tasks 1 |
   | scheduler killed during Silver | success | Silver 2 |
-  | Spark job container killed during Silver | success | Silver 2 |
+  | Silver's own job container killed | success | Silver 2 |
   | Garage down at Bronze | success | Bronze 2 |
-  | registry restarted during Bronze | success | Bronze 1 |
+  | registry down at Bronze's lookup of a new schema id | success | Bronze 2 |
   | backfill overlapping the pipeline | both succeed | 1 |
   | release created and reproduced | success | 1 |
 
-  Reconciliation then passed 11/11. The registry scenario is the weakest: with 17 new
-  records the evidence does not show that Bronze called the registry during the restart.
-  Two earlier runs stopped before the first fault on driver defects (D17).
+  Reconciliation then passed 11/11. In the registry scenario Bronze's first attempt
+  asked the stopped registry for schema id 3, which it had never archived, and exited 75
+  with `RegistryUnavailable`; the retry archived it.
+* Each scenario now fails unless its fault visibly hit, because two earlier passes did
+  not prove their fault:
+  * run 43664801824's registry scenario never reached the registry (D19);
+  * run 43701689766's Spark kill missed Silver, since every task ran once (D20).
+
+  Two runs before those stopped before the first fault on driver defects (D17).
 
 ## 9. Testing strategy and results
 | Level | What | Result on the final code |
 |---|---|---|
-| Fast (every PR) | 219 unit tests; DAG checks in the Airflow image; dbt parse; 4 ML tests; promtool rule tests; Terraform fmt, validate, plan, trivy; pip-audit | all pass in CI on the final heads of #2, #4, #5 and #6 |
-| Integration (every PR) | lakehouse stack: 21 Spark/S3 tests, dbt build twice (28/28 each), 6 Trino checks, 2 real-Kafka tests; Milestone 2 stack tests (19 non-disruptive, 8 disruptive) | all pass in CI on the final heads of all four PRs; one Milestone 2 stack test failed twice earlier (O1, section 15) |
-| Full system (manual or labelled) | Gates A, B and C on a fresh runner | Gates A and C passed and reproduced this machine's results exactly (same build scopes, digests, reconciliation, Gold checks and model metrics); Gate B passed in run 43664801824 (section 8) |
+| Fast (every PR) | 223 unit tests; DAG checks in the Airflow image; dbt parse; 4 ML tests; promtool rule tests; Terraform fmt, validate, plan, trivy; pip-audit | all pass in CI on the final heads of #2, #4, #5 and #6, and on `main` after the merges |
+| Integration (every PR) | lakehouse stack: 21 Spark/S3 tests, dbt build twice (3 models and 25 tests, 28/28 each), 6 Trino checks, 2 real-Kafka tests; Milestone 2 stack tests (19 non-disruptive, 8 disruptive) | all pass in CI on the final heads of all four PRs; one Milestone 2 stack test failed twice earlier (O1, section 15) |
+| Full system (manual or labelled) | Gates A, B and C on a fresh runner | Gates A and C passed and reproduced this machine's results exactly (same build scopes, digests, reconciliation, Gold checks and model metrics); Gate B passed in run 43704310730 (section 8) |
 | Final validation (this machine) | E2E oracle, benchmarks, game day, scale run, DR restore, freshness SLO | sections 10, 13, 14 |
 
 ## 10. Observability, SLOs and alerting
@@ -200,7 +207,7 @@ battery (PSI 0.21–0.30), and absent for velocity.
   Assumptions and caveats are listed in `docs/reviews/evidence/cost-model.md`.
 
 ## 15. Defects found, risks and limitations
-* **Defects:** D1–D18 in `docs/reviews/platform-execution.md`, each with the test that
+* **Defects:** D1–D20 in `docs/reviews/platform-execution.md`, each with the test that
   found it and the fix. Two were Milestone 2 defects that only final validation
   exposed:
   * the API did not survive a container restart (D12);
@@ -214,10 +221,15 @@ battery (PSI 0.21–0.30), and absent for velocity.
     worked around with chunks);
   * the cause of Milestone 2's consumer-group wedge remains unproven, as stated in its
     audit;
-  * O1: twice in CI the Milestone 2 producer stopped delivering after an 8 s broker
-    restart and timed out after 300 s. Ruled out: the broker's startup error, a
-    dependency change, and librdkafka's re-bootstrap (measured). It did not reproduce
-    locally. The test now prints the client's own log when it fails.
+  * O1, [issue #7](https://github.com/efkontoes/fleetforge/issues/7): in 2 of 33 CI
+    stack jobs the Milestone 2 producer stopped delivering after an 8 s broker restart
+    and timed out after 300 s. In both, the producer saw leaderless partitions at the
+    stop and then logged no reconnect attempt, while other clients reconnected within
+    about 16 s. Ruled out: the broker's startup error, a dependency change, and
+    librdkafka's re-bootstrap (measured). It did not reproduce locally. The test now
+    prints the client's own log when it fails, and the issue holds the investigation
+    plan. No data is lost silently: every unacknowledged message is reported as
+    failed.
 
 ## 16. How to reproduce, and the evidence index
 ```sh
@@ -240,4 +252,4 @@ python3 scripts/freshness_run.py --cycles 6 --cycle-s 600                    # a
 | Prices and cost | `docs/reviews/evidence/aws-prices-eu-west-1.json`, `cost-model.md` |
 | Gates A and C on a fresh CI runner | `docs/reviews/evidence/ci-fresh-runner/` |
 | Freshness SLO | `docs/reviews/evidence/freshness-run.json` (`scripts/freshness_run.py`) |
-| Gate B | `docs/reviews/evidence/ci-gate-b/gate-b.json` |
+| Gate B | `docs/reviews/evidence/ci-gate-b/gate-b.json` (earlier runs beside it) |

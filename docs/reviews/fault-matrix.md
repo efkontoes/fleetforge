@@ -6,7 +6,7 @@ from a run that actually happened.
 
 ## Lakehouse (Milestones 3-6)
 
-L15-L20 come from Gate B, CI run 43664801824 (`evidence/ci-gate-b/gate-b.json`); reconciliation passed 11/11 after all of them.
+L15-L20 come from Gate B, CI run 43704310730 (`evidence/ci-gate-b/gate-b.json`); reconciliation passed 11/11 after all of them.
 
 | # | Fault | Injected by | Expected | Result |
 |---|---|---|---|---|
@@ -25,9 +25,9 @@ L15-L20 come from Gate B, CI run 43664801824 (`evidence/ci-gate-b/gate-b.json`);
 | L13 | Fresh catalog never touched by Trino | Airflow maintenance DAG, first run | jobs work on a V0 JDBC catalog | failed first (D10), passed after the fix |
 | L14 | Lake with no Silver build yet | Airflow maintenance DAG | reconcile reports nothing to check | failed first (D11), passed after the fix |
 | L15 | Airflow scheduler killed during Silver | Gate B | run completes after restart; reconciliation passes | passed: Silver ran twice, the run succeeded |
-| L16 | Spark job container killed during Silver | Gate B | task retried; reconciliation passes | passed: Silver retried (2 attempts), the run succeeded |
+| L16 | Silver's job container killed | Gate B | task retried; reconciliation passes | passed: Silver ran twice, the run succeeded; the scenario now fails unless Silver is retried (D20) |
 | L17 | Object store down at Bronze | Gate B | Bronze retried until Garage is back | passed: Bronze failed once while Garage was down, then succeeded |
-| L18 | Registry restarted during Bronze | Gate B | Bronze retried; no record misclassified | passed on the first attempt; with 17 new records the evidence does not show that Bronze called the registry during the restart, so this row is the weakest |
+| L18 | Registry down when Bronze looks up a new schema id | Gate B | Bronze retried; no record misclassified | passed: attempt 1 exited 75 with `RegistryUnavailable` for schema id 3, attempt 2 archived it, Silver and reconciliation passed (D19 made this provable) |
 | L19 | Completed run repeated | Gate B | every step idempotent | passed: a run with no new data succeeded |
 | L20 | Backfill overlapping the pipeline | Gate B | writer pool serialises them; both succeed | passed: both succeeded |
 
