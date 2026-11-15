@@ -129,7 +129,7 @@ Gold, a Spark job owns releases, and Airflow only orders and retries.
 |---|---|---|
 | Fast (every PR) | 223 unit tests; DAG checks in the Airflow image; dbt parse; 4 ML tests; promtool rule tests; Terraform fmt, validate, plan, trivy; pip-audit | all pass in CI on the final heads of #2, #4, #5 and #6, and on `main` after the merges |
 | Integration (every PR) | lakehouse stack: 21 Spark/S3 tests, dbt build twice (3 models and 25 tests, 28/28 each), 6 Trino checks, 2 real-Kafka tests; Milestone 2 stack tests (19 non-disruptive, 8 disruptive) | all pass in CI on the final heads of all four PRs; one Milestone 2 stack test failed twice earlier (O1, section 15) |
-| Full system (manual or labelled) | Gates A, B and C on a fresh runner | Gates A and C passed and reproduced this machine's results exactly (same build scopes, digests, reconciliation, Gold checks and model metrics); Gate B passed in run 43704310730 (section 8) |
+| Full system (manual or labelled) | Gates A, B and C on a fresh runner | Gates A and C reproduced this machine's results: the same build scopes, row counts, reconciliation, Gold checks and model metrics, and within each run one digest for incremental Silver, a full rebuild and the Python reference (digests differ between runs, which create their own topics). On `main` (`5c9b1fa`) Gates A, B and C passed in run 43708265800 |
 | Final validation (this machine) | E2E oracle, benchmarks, game day, scale run, DR restore, freshness SLO | sections 10, 13, 14 |
 
 ## 10. Observability, SLOs and alerting
@@ -251,5 +251,6 @@ python3 scripts/freshness_run.py --cycles 6 --cycle-s 600                    # a
 | Benchmarks | `benchmarks/results/m2-20261114T2016*`, `…T2019*` |
 | Prices and cost | `docs/reviews/evidence/aws-prices-eu-west-1.json`, `cost-model.md` |
 | Gates A and C on a fresh CI runner | `docs/reviews/evidence/ci-fresh-runner/` |
+| Gates A, B and C on `main` | `docs/reviews/evidence/ci-release/` |
 | Freshness SLO | `docs/reviews/evidence/freshness-run.json` (`scripts/freshness_run.py`) |
 | Gate B | `docs/reviews/evidence/ci-gate-b/gate-b.json` (earlier runs beside it) |
