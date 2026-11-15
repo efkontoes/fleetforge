@@ -46,11 +46,20 @@ def airflow(*args: str) -> str:
     return sh(*LAKE, "exec", "-T", "airflow-scheduler", "airflow", *args)
 
 
+def cli_json(out: str):
+    """The JSON in the CLI's stdout, which also carries log lines such as "... [warning ] ..."."""
+    lines = out.splitlines(keepends=True)
+    for i, line in enumerate(lines):
+        if line.startswith(("[", "{")):
+            try:
+                return json.JSONDecoder().raw_decode("".join(lines[i:]))[0]
+            except json.JSONDecodeError:
+                continue  # a log line that happens to start with a bracket
+    raise ValueError(f"no JSON in the Airflow CLI output:\n{out[-2000:]}")
+
+
 def airflow_json(*args: str):
-    """The CLI's JSON, skipping the log lines Airflow prints around it."""
-    out = airflow(*args, "--output", "json")
-    start = min(i for i in (out.find("["), out.find("{")) if i >= 0)
-    return json.JSONDecoder().raw_decode(out[start:])[0]
+    return cli_json(airflow(*args, "--output", "json"))
 
 
 def trigger(dag: str, conf: dict | None = None) -> str:
@@ -96,8 +105,14 @@ def job_container() -> str | None:
 
 
 def tries(dag: str, run_id: str) -> dict[str, int]:
-    rows = airflow_json("tasks", "states-for-dag-run", dag, run_id)
-    return {t["task_id"]: int(t.get("try_number") or 0) for t in rows}
+    """Attempts per task, read from Airflow's database because the CLI does not show them."""
+    sql = (
+        "SELECT task_id, try_number FROM task_instance"
+        f" WHERE dag_id = '{dag}' AND run_id = '{run_id}'"
+    )
+    out = sh(*LAKE, "exec", "-T", "catalog-db", "psql", "-U", "iceberg", "-d", "airflow", "-At",
+             "-F", ",", "-c", sql)  # fmt: skip
+    return {task: int(n) for task, n in (line.split(",") for line in out.splitlines() if line)}
 
 
 def publish(batch: int) -> int:
