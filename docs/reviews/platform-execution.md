@@ -35,7 +35,15 @@ a time.
 | Gate B | orchestrated recovery from six isolated faults | runs on a CI runner (needs about 5.5 GiB) |
 
 ## Milestone 5: ML dataset and baseline
-Pending.
+
+| Workstream | Acceptance | Status |
+|---|---|---|
+| Dataset export | Parquet per split, manifest, checksums, data card; equals the release hash | two exports of gate-r2 byte-identical; export refuses a hash mismatch |
+| Baseline task | defensible synthetic label, documented as synthetic; baseline plus stronger model; train-only preprocessing; precision, recall, F1, PR-AUC | wall contact within 30 steps; baseline PR-AUC 0.629 beats gradient boosting 0.276 (episode split), explained in ADR 0020 |
+| Tracking | MLflow or equivalent; registered model | mlflow-skinny, skops models, telemetry off; training twice gives identical metrics; model registered |
+| Drift | PSI, KS, Wasserstein with caveats | position and battery drift between releases (PSI 0.21-0.30), velocity stable |
+| LLM assistant | optional | not built (lowest priority; nothing depends on it) |
+| Gate C | Kafka to a registered experiment, reproducible | passed (Gate A data, `make -f lakehouse.mk lake-gate-c`) |
 
 ## Milestone 6: infrastructure and operations
 Pending.
