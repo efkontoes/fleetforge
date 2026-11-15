@@ -1,0 +1,64 @@
+name: full-system
+
+# Full-system level: the whole platform from a clean checkout on a fresh runner.
+#   gate-a: Kafka -> Bronze -> incremental Silver -> releases -> dbt Gold -> Trino
+#   gate-b: the same pipeline under Airflow with six injected faults
+# Manual only: one run takes about an hour of runner time.
+on:
+  workflow_dispatch:
+    inputs:
+      gates:
+        description: "Gates to run"
+        default: "a b"
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - name: Secrets for this run only
+        run: sh scripts/make-env.sh && sh scripts/make-lakehouse-env.sh
+      - name: Build images
+        run: |
+          docker compose build
+          make -f lakehouse.mk lake-build
+          docker compose --env-file .env.lakehouse -f infrastructure/lakehouse/compose.yaml \
+            -f infrastructure/airflow/compose.yaml --profile airflow build
+      - name: Milestone 2 Kafka and registry
+        run: |
+          docker compose --profile core up -d kafka-init schema-init
+          docker compose --profile core up -d --wait kafka schema-registry
+
+      - name: Gate A
+        if: contains(inputs.gates, 'a')
+        run: make -f lakehouse.mk lake-gate-a
+      - name: Gate B (Airflow, Spark jobs, Trino, Kafka on one runner)
+        if: contains(inputs.gates, 'b')
+        env:
+          FLEETFORGE_PIPELINE_SCHEDULE: ""
+        run: |
+          LAKE_FORCE=1 make -f lakehouse.mk lake-query
+          docker compose --env-file .env.lakehouse -f infrastructure/lakehouse/compose.yaml \
+            -f infrastructure/airflow/compose.yaml --profile airflow --profile query up -d
+          python3 scripts/gate_b.py
+
+      - name: Memory and containers at the end
+        if: always()
+        run: docker stats --no-stream; free -m
+      - name: Logs on failure
+        if: failure()
+        run: |
+          docker compose --env-file .env.lakehouse -f infrastructure/lakehouse/compose.yaml \
+            -f infrastructure/airflow/compose.yaml --profile airflow --profile query logs --tail 300
+          sudo dmesg | grep -i -E "oom|killed process" | tail -5 || true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        if: always()
+        with:
+          name: full-system-evidence
+          path: |
+            build/lakehouse-evidence/*.json
+            build/lakehouse-evidence/*.xml
