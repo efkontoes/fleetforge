@@ -1,1 +1,1 @@
-Run 43646391081 (full-system workflow, ubuntu-24.04 runner, commit cd9cc89): Gates A and C passed; Gate B stopped at a JSON parsing bug in its driver before any fault scenario (fixed in bf50391, rerun pending).
+Run 43646391081 (full-system workflow, ubuntu-24.04 runner, commit cd9cc89): Gates A and C passed; Gate B stopped at a JSON parsing bug in its driver before any fault scenario (D17); it passed later, see `../ci-gate-b/`.

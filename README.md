@@ -154,7 +154,8 @@ Gate B (Airflow under six injected faults) needs about 5.5 GiB, so it runs on a 
 add the label `gate-b` (Gate B only) or `full-system` (all three gates) to a pull request,
 or dispatch the `full-system` workflow. For the release it passed in CI run 43704310730:
 every fault was followed by the retry it should cause, including a registry outage at a
-real schema lookup, and reconciliation passed 11/11.
+real schema lookup, and reconciliation passed 11/11. Gates A, B and C then passed together
+on `main` in run 43708265800.
 
 ## Documentation
 * [Execution ledger](docs/reviews/platform-execution.md) (defects D1–D20, optimisations) ·

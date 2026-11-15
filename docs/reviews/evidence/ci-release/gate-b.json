@@ -1,0 +1,236 @@
+{
+  "started_at": "2026-11-15T11:39:30.783693+00:00",
+  "scenarios": [
+    {
+      "scenario": "baseline run",
+      "published": 2009,
+      "run_id": "gate-b-fleetforge_lakehouse-1794742781967",
+      "state": "success",
+      "tries": {
+        "bronze": 1,
+        "silver": 1,
+        "gold": 1,
+        "reconcile": 1,
+        "freshness": 1
+      },
+      "detail": null,
+      "seconds": 159
+    },
+    {
+      "scenario": "repeat a completed run (idempotent)",
+      "published": 0,
+      "run_id": "gate-b-fleetforge_lakehouse-1794742941297",
+      "state": "success",
+      "tries": {
+        "silver": 1,
+        "gold": 1,
+        "bronze": 1,
+        "reconcile": 1,
+        "freshness": 1
+      },
+      "detail": null,
+      "seconds": 117
+    },
+    {
+      "scenario": "Airflow scheduler killed during Silver",
+      "published": 2146,
+      "run_id": "gate-b-fleetforge_lakehouse-1794743060676",
+      "state": "success",
+      "tries": {
+        "reconcile": 1,
+        "freshness": 1,
+        "bronze": 1,
+        "silver": 2,
+        "gold": 1
+      },
+      "detail": "scheduler killed while silver ran, then restarted",
+      "seconds": 195
+    },
+    {
+      "scenario": "Spark job container killed during Silver",
+      "published": 2065,
+      "run_id": "gate-b-fleetforge_lakehouse-1794743257083",
+      "state": "success",
+      "tries": {
+        "bronze": 1,
+        "gold": 1,
+        "reconcile": 1,
+        "freshness": 1,
+        "silver": 2
+      },
+      "detail": "killed Silver's job container d1ee3020a57d; Silver ran 2 times",
+      "seconds": 232
+    },
+    {
+      "scenario": "Garage unavailable at Bronze",
+      "published": 182,
+      "run_id": "gate-b-fleetforge_lakehouse-1794743491519",
+      "state": "success",
+      "tries": {
+        "silver": 1,
+        "gold": 1,
+        "reconcile": 1,
+        "freshness": 1,
+        "bronze": 2
+      },
+      "detail": "Garage stopped until Bronze failed once, then started",
+      "seconds": 383
+    },
+    {
+      "scenario": "registry down at Bronze's schema lookup",
+      "published": 17,
+      "run_id": "gate-b-fleetforge_lakehouse-1794743877851",
+      "state": "success",
+      "tries": {
+        "reconcile": 1,
+        "freshness": 1,
+        "silver": 1,
+        "gold": 1,
+        "bronze": 2
+      },
+      "detail": "registry stopped before Bronze looked up new schema id 5; attempt 1 exited 75 (RegistryUnavailable: schema 5: [Errno -3] Temporary failure in name resolution); attempt 2 archived it after the registry started",
+      "seconds": 294
+    },
+    {
+      "scenario": "backfill overlapping the pipeline",
+      "published": 0,
+      "run_id": "gate-b-fleetforge_lakehouse-1794744172008",
+      "state": "success",
+      "tries": {
+        "freshness": 1,
+        "silver": 1,
+        "gold": 1,
+        "bronze": 1,
+        "reconcile": 1
+      },
+      "detail": "backfill gate-b-fleetforge_backfill-1794744178496 ran beside the pipeline: success",
+      "seconds": 178
+    },
+    {
+      "scenario": "release created and reproduced",
+      "published": 0,
+      "run_id": "gate-b-fleetforge_release-1794744350173",
+      "state": "success",
+      "tries": {
+        "create": 1,
+        "reproduce": 1,
+        "release_tests": 1
+      },
+      "detail": null,
+      "seconds": 62
+    }
+  ],
+  "reconciliation": [
+    {
+      "run_id": "8a6efc9231484a259bfe6100ddcc0659",
+      "check_name": "bronze_coordinates_unique",
+      "passed": true,
+      "expected": "6419",
+      "actual": "6419",
+      "detail": "one row per (topic id, partition, offset)",
+      "silver_build_id": "b6e76dcf207d6d56d08d4beb",
+      "checked_at": "2026-11-15 12:07:08.208007+00:00"
+    },
+    {
+      "run_id": "8a6efc9231484a259bfe6100ddcc0659",
+      "check_name": "bronze_equals_outcomes",
+      "passed": true,
+      "expected": "6391",
+      "actual": "6391",
+      "detail": "accepted + duplicate + rejected + unresolved = {'ACCEPTED': 3954, 'REJECTED': 2261, 'DUPLICATE': 176}",
+      "silver_build_id": "b6e76dcf207d6d56d08d4beb",
+      "checked_at": "2026-11-15 12:07:09.256940+00:00"
+    },
+    {
+      "run_id": "8a6efc9231484a259bfe6100ddcc0659",
+      "check_name": "outcomes_one_per_record",
+      "passed": true,
+      "expected": "6391",
+      "actual": "6391",
+      "detail": null,
+      "silver_build_id": "b6e76dcf207d6d56d08d4beb",
+      "checked_at": "2026-11-15 12:07:09.719158+00:00"
+    },
+    {
+      "run_id": "8a6efc9231484a259bfe6100ddcc0659",
+      "check_name": "unchanged_since_build:telemetry_events",
+      "passed": true,
+      "expected": "6853982883625663975",
+      "actual": "6853982883625663975",
+      "detail": "written only by Silver builds",
+      "silver_build_id": "b6e76dcf207d6d56d08d4beb",
+      "checked_at": "2026-11-15 12:07:09.747680+00:00"
+    },
+    {
+      "run_id": "8a6efc9231484a259bfe6100ddcc0659",
+      "check_name": "unchanged_since_build:telemetry_record_outcomes",
+      "passed": true,
+      "expected": "7928631393304691091",
+      "actual": "7928631393304691091",
+      "detail": "written only by Silver builds",
+      "silver_build_id": "b6e76dcf207d6d56d08d4beb",
+      "checked_at": "2026-11-15 12:07:09.753831+00:00"
+    },
+    {
+      "run_id": "8a6efc9231484a259bfe6100ddcc0659",
+      "check_name": "events_equal_accepted",
+      "passed": true,
+      "expected": "3954",
+      "actual": "3954",
+      "detail": null,
+      "silver_build_id": "b6e76dcf207d6d56d08d4beb",
+      "checked_at": "2026-11-15 12:07:10.477275+00:00"
+    },
+    {
+      "run_id": "8a6efc9231484a259bfe6100ddcc0659",
+      "check_name": "event_ids_unique",
+      "passed": true,
+      "expected": "3954",
+      "actual": "3954",
+      "detail": null,
+      "silver_build_id": "b6e76dcf207d6d56d08d4beb",
+      "checked_at": "2026-11-15 12:07:10.477290+00:00"
+    },
+    {
+      "run_id": "8a6efc9231484a259bfe6100ddcc0659",
+      "check_name": "gold_quality_is_current",
+      "passed": true,
+      "expected": "[\"b6e76dcf207d6d56d08d4beb\"]",
+      "actual": "[\"b6e76dcf207d6d56d08d4beb\"]",
+      "detail": null,
+      "silver_build_id": "b6e76dcf207d6d56d08d4beb",
+      "checked_at": "2026-11-15 12:07:10.837398+00:00"
+    },
+    {
+      "run_id": "8a6efc9231484a259bfe6100ddcc0659",
+      "check_name": "gold_quality_equals_outcomes",
+      "passed": true,
+      "expected": "6391",
+      "actual": "6391",
+      "detail": null,
+      "silver_build_id": "b6e76dcf207d6d56d08d4beb",
+      "checked_at": "2026-11-15 12:07:10.837413+00:00"
+    },
+    {
+      "run_id": "8a6efc9231484a259bfe6100ddcc0659",
+      "check_name": "gold_daily_equals_silver",
+      "passed": true,
+      "expected": "0",
+      "actual": "0",
+      "detail": "robot-days that disagree, final days aside",
+      "silver_build_id": "b6e76dcf207d6d56d08d4beb",
+      "checked_at": "2026-11-15 12:07:12.144557+00:00"
+    },
+    {
+      "run_id": "8a6efc9231484a259bfe6100ddcc0659",
+      "check_name": "release_rows:gate-b-r1",
+      "passed": true,
+      "expected": "3950",
+      "actual": "3950",
+      "detail": null,
+      "silver_build_id": "b6e76dcf207d6d56d08d4beb",
+      "checked_at": "2026-11-15 12:07:12.449811+00:00"
+    }
+  ],
+  "finished_at": "2026-11-15T12:07:14.978062+00:00"
+}

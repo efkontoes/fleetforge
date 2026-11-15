@@ -23,7 +23,7 @@ a time.
 | Gold tables | daily telemetry, pipeline quality and rates, state observations, releases (spec §9) | dbt output equals the Python reference on Trino; final days stay frozen and reopen on request; releases reproduce after newer builds and after snapshot expiry (Gate A) |
 | Maintenance, backfill, retention | expiry and orphans with release tags kept; storage report | Spark maintenance tests; Gate A expired snapshots, kept every release tag and wrote the storage report; the maintenance DAG ran end to end under Airflow |
 | Reconciliation | Kafka → Bronze → Silver → Gold counts recorded in `ops.reconciliation_runs` | 10/10 checks pass in Gate A, locally and on a fresh CI runner; 12/12 after the DR restore (two checks added since) |
-| Gate A | real engines, tens of thousands of observations, replay, idempotence, old release reproduced, Spark killed at a commit boundary | passed at 46,696 records, locally and on a fresh CI runner with identical results (`evidence/gate-a.json`, `evidence/ci-fresh-runner/`) |
+| Gate A | real engines, tens of thousands of observations, replay, idempotence, old release reproduced, Spark killed at a commit boundary | passed at 46,696 records, locally and on fresh CI runners with the same build scopes, row counts, Gold checks and reconciliation (`evidence/gate-a.json`, `evidence/ci-fresh-runner/`, `evidence/ci-release/`) |
 
 ## Milestone 4: orchestration and quality
 
@@ -66,7 +66,7 @@ a time.
 | 10,000 events/s × 60 s | 605,829 events, 9,995.9/s, peak 12,957/s, lag max 4,130, drained; oracle matched |
 | Fault game day | Milestone 2: 19 + 7 stack tests pass; lakehouse: L1-L14 pass (fault matrix) |
 | Scale | 1.06 M records: Bronze 128 s, full Silver 238-492 s, small delta 124 s (one core) |
-| Clean-environment CI | full-system run 43646391081: Gates A and C passed with results identical to this machine; Gate B passed in run 43704310730 |
+| Clean-environment CI | full-system run 43646391081: Gates A and C passed with the same build scopes, row counts, reconciliation and model metrics as this machine; Gate B passed in run 43704310730; on `main` (`5c9b1fa`) ci, lakehouse, platform and Gates A, B and C passed (run 43708265800, `evidence/ci-release/`) |
 
 ## Defects found during execution
 
