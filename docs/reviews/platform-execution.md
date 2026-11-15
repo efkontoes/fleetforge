@@ -11,7 +11,7 @@ a time.
 |---|---|---|---|---|
 | Registry-outage hotfix (PR #3) | CI green, merge commit | `1735569` on main | PR #3 checks green | merged |
 | M3 sync with main | merge, not rebase (branch is shared) | `bc0ee30` | pre-sync tag `m3-pre-sync-d3fb961` pushed | done |
-| Merges of #2, #4, #5, #6 | green CI, regular merge commits, in order | — | every branch pushed; ci, lakehouse and platform pass on all four heads (2026-11-15) | not merged yet, by request: waiting for the go-ahead |
+| Merges of #2, #4, #5, #6 | green CI, regular merge commits, in order | `6b6c028`, `a5d1953`, `bd3c169`, `21da3b7` on main | ci, lakehouse and platform pass on all four heads; before each merge the merged tree was checked to be identical to the tested head; ci, lakehouse and platform pass on `21da3b7` | merged 2026-11-15 |
 | Schema archiver on ADR 0016 | only an explicit 404 is recorded, and only as "not found yet"; other errors stop Bronze | M3 branch | unit tests; Spark Bronze tests | done |
 
 ## Milestone 3: lakehouse
@@ -30,10 +30,10 @@ a time.
 | Workstream | Acceptance | Status |
 |---|---|---|
 | Airflow DAGs | pipeline, release, maintenance and backfill DAGs; idempotent, retried with backoff, bounded by timeouts; exit 65 fails without retry; one-slot writer pool | 4 DAGs pass the policy checks inside the Airflow 3.3.2 image; maintenance DAG ran end to end through the scheduler, the socket proxy and Spark job containers (it found D10 and D11) |
-| dbt | analytical Gold on Trino, no second Silver; tests for keys, not-null, ranges, enums, referential integrity, cross-table and release consistency, freshness, custom invariants | 28 data tests pass in Gate A and the lakehouse CI |
+| dbt | analytical Gold on Trino, no second Silver; tests for keys, not-null, ranges, enums, referential integrity, cross-table and release consistency, freshness, custom invariants | 25 data tests and 3 models (28 dbt nodes) pass in Gate A and the lakehouse CI |
 | Lineage | OpenLineage RunEvents with Iceberg snapshot ids as dataset versions | written by every job to `lakehouse_ops.lineage_events` |
 | Monitoring | exporter, alert rules with runbook links, freshness SLO measured | promtool rule tests pass; exporter reads real job runs; freshness SLO met over six 10-minute cycles: 19,140 records, p95 739 s, max 770 s, 100% within 15 minutes (`evidence/freshness-run.json`) |
-| Gate B | orchestrated recovery from six isolated faults | passed on a CI runner (run 43664801824): eight scenarios, every DAG run succeeded, retries where faults hit (Silver 2 attempts after the scheduler and Spark kills, Bronze 2 while Garage was down), reconciliation 11/11 (`evidence/ci-gate-b/`) |
+| Gate B | orchestrated recovery from six isolated faults | passed on a CI runner (run 43704310730, release commit d49c19e): eight scenarios, every DAG run succeeded, and each injected failure was followed by a retry (Silver 2 after the scheduler kill and after Silver's container was killed, Bronze 2 with Garage down and with the registry down at a real schema lookup); reconciliation 11/11 (`evidence/ci-gate-b/`). Earlier passes proved less (D19, D20) |
 
 ## Milestone 5: ML dataset and baseline
 
@@ -66,7 +66,7 @@ a time.
 | 10,000 events/s × 60 s | 605,829 events, 9,995.9/s, peak 12,957/s, lag max 4,130, drained; oracle matched |
 | Fault game day | Milestone 2: 19 + 7 stack tests pass; lakehouse: L1-L14 pass (fault matrix) |
 | Scale | 1.06 M records: Bronze 128 s, full Silver 238-492 s, small delta 124 s (one core) |
-| Clean-environment CI | full-system run 43646391081: Gates A and C passed with results identical to this machine; Gate B passed in run 43664801824 |
+| Clean-environment CI | full-system run 43646391081: Gates A and C passed with results identical to this machine; Gate B passed in run 43704310730 |
 
 ## Defects found during execution
 
@@ -90,12 +90,14 @@ a time.
 | D16 | CI on #2 | the retention-gap stack test assumed its second fleet would write to a partition the first had used; with the clock-based seed of that run all six robots hashed elsewhere (0.7% of seeds) | publish up to five fleets until one lands; no seed among 3,000 fails |
 | D17 | Gate B, second CI run | the driver decoded JSON from the first bracket on stdout, which in Airflow 3.3 is a structlog `[warning ]` line; it also read `try_number`, which the CLI never prints, so every retry would have been recorded as 0 | decode from the first line that parses (unit tests on output captured from the image); attempts come from Airflow's `task_instance` table |
 | D18 | CI, unit jobs | the new parser test imported `scripts`, which plain `pytest` (unlike `python -m pytest`) cannot find | `pythonpath = ["."]` in the pytest configuration |
+| D19 | release review of the Gate B evidence (L18) | the registry scenario never reached the registry: Bronze looks up only schema ids it has not archived, and every Gate B batch reused the two ids the baseline run archived, so its first-attempt success proved nothing | the scenario registers revision 2 with a unique `doc` under its own subject (a new id, same encoding), publishes batch 4's revision-2 records with it, keeps the registry stopped until Bronze fails that lookup once, and checks in `lakehouse_ops.job_runs` that attempt 1 exited 75 with `RegistryUnavailable` for that id and that the retry archived it |
+| D20 | Gate B on PR #8 (run 43701689766) | the Spark scenario killed the first container from the Spark image 45 s after Silver started; on that faster runner every task still ran once, so the kill missed Silver and the scenario passed anyway | the scenario finds Silver's container by the job module in its command, kills it 10 s after it starts, and fails unless Silver ran at least twice (unit tests for the lookup) |
 
 ## Open observations
 
 | # | Seen in | What happened | State |
 |---|---|---|---|
-| O1 | CI on #6 (4aaabd5) and #4 (de15f59), Milestone 2 stack job | `test_producer_survives_broker_interruption`: after an 8 s broker stop the idempotent producer delivered nothing more within its 300 s message timeout | open. Ruled out: the broker's startup `NotControllerException` (it appears on every restart, including passing ones), a dependency change (confluent-kafka 2.16.1 in CI and locally), and librdkafka's re-bootstrap (disabling it did not shorten reconnection: 9.5-16.6 s against 7.9-9.5 s). Not reproduced in 10 local runs. The test now logs the client's idempotence, broker and topic events, printed on failure, so the next occurrence records its cause. It passed on all four heads afterwards |
+| O1 | CI on #6 (4aaabd5) and #4 (de15f59), Milestone 2 stack job | `test_producer_survives_broker_interruption`: after an 8 s broker stop the idempotent producer delivered nothing more within its 300 s message timeout | open, [issue #7](https://github.com/efkontoes/fleetforge/issues/7) (2 of 33 CI stack jobs). In both failures the producer logged leaderless partitions at the stop and then no reconnect attempt at all, while other clients reconnected within about 16 s; passing local runs log the same warning and then reconnect. Ruled out: the broker's startup `NotControllerException` (it appears on every restart, including passing ones), a dependency change (confluent-kafka 2.16.1 in CI and locally), and librdkafka's re-bootstrap (disabling it did not shorten reconnection: 9.5-16.6 s against 7.9-9.5 s). Not reproduced in 10 local runs. The test now logs the client's idempotence, broker and topic events, printed on failure; the issue lists the investigation plan |
 
 ## Measured optimisations (Milestone 6)
 

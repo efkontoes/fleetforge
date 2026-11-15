@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 
 EVIDENCE = Path("build/lakehouse-evidence/gate-b.json")
@@ -99,25 +100,52 @@ def wait_task(dag: str, run_id: str, task: str, state: str = "running", minutes:
     raise TimeoutError(f"{task} never reached {state}")
 
 
-def job_container() -> str | None:
-    ids = sh("docker", "ps", "-q", "--filter", f"ancestor={SPARK_IMAGE}").split()
-    return ids[0] if ids else None
+def job_container(module: str) -> str | None:
+    """The running Spark container of one job, found by the module in its command."""
+    out = sh("docker", "ps", "--no-trunc", "--filter", f"ancestor={SPARK_IMAGE}",
+             "--format", "{{.ID}} {{.Command}}")  # fmt: skip
+    return next((line.split()[0] for line in out.splitlines() if f".jobs.{module}" in line), None)
+
+
+def psql(db: str, sql: str) -> list[list[str]]:
+    """Rows from a database on catalog-db (Airflow's or the catalog's), as tab-separated fields."""
+    out = sh(*LAKE, "exec", "-T", "catalog-db", "psql", "-U", "iceberg", "-d", db, "-At",
+             "-F", "\t", "-c", sql)  # fmt: skip
+    return [line.split("\t") for line in out.splitlines() if line]
 
 
 def tries(dag: str, run_id: str) -> dict[str, int]:
     """Attempts per task, read from Airflow's database because the CLI does not show them."""
+    where = f"dag_id = '{dag}' AND run_id = '{run_id}'"
+    sql = f"SELECT task_id, try_number FROM task_instance WHERE {where}"
+    return {task: int(n) for task, n in psql("airflow", sql)}
+
+
+def bronze_runs(dag: str, run_id: str) -> list[tuple[int, dict]]:
+    """Bronze's recorded runs since the DAG run was queued, oldest first: exit code and report."""
+    sql = f"SELECT queued_at FROM dag_run WHERE dag_id = '{dag}' AND run_id = '{run_id}'"
+    queued = psql("airflow", sql)[0][0]
     sql = (
-        "SELECT task_id, try_number FROM task_instance"
-        f" WHERE dag_id = '{dag}' AND run_id = '{run_id}'"
+        "SELECT exit_code, report FROM lakehouse_ops.job_runs"
+        f" WHERE job = 'bronze_ingest' AND started_at >= '{queued}' ORDER BY started_at"
     )
-    out = sh(*LAKE, "exec", "-T", "catalog-db", "psql", "-U", "iceberg", "-d", "airflow", "-At",
-             "-F", ",", "-c", sql)  # fmt: skip
-    return {task: int(n) for task, n in (line.split(",") for line in out.splitlines() if line)}
+    return [(int(code), json.loads(report)) for code, report in psql("iceberg_catalog", sql)]
 
 
-def publish(batch: int) -> int:
-    """Publish one corpus batch to the real topics, through the Spark image's Python."""
-    code = f"from scripts.gate_b_publish import publish; print(publish({batch}))"
+def publish(batch: int, v2_id: int | None = None) -> int:
+    """Publish one corpus batch to the real topics; v2_id replaces revision 2's schema id."""
+    code = f"from scripts.gate_b_publish import publish; print(publish({batch}, {v2_id}))"
+    return int(spark_python(code))
+
+
+def fresh_schema() -> int:
+    """Register a schema no Bronze run has archived, and return its id."""
+    code = "from scripts.gate_b_publish import fresh_schema; print(fresh_schema())"
+    return int(spark_python(code))
+
+
+def spark_python(code: str) -> str:
+    """Run Python in the Spark image, which has the project's dependencies; return the last line."""
     out = sh(
         "docker",
         "compose",
@@ -138,7 +166,7 @@ def publish(batch: int) -> int:
         "-c",
         code,
     )
-    return int(out.strip().splitlines()[-1])
+    return out.strip().splitlines()[-1]
 
 
 def scenario(
@@ -148,8 +176,9 @@ def scenario(
     fault,
     dag: str = "fleetforge_lakehouse",
     conf: dict | None = None,
+    v2_id: int | None = None,
 ) -> None:
-    published = publish(batch) if batch is not None else 0
+    published = publish(batch, v2_id) if batch is not None else 0
     start = time.monotonic()
     run_id = trigger(dag, conf)
     detail = fault(dag, run_id) if fault else None
@@ -178,12 +207,17 @@ def kill_scheduler_during_silver(dag: str, run_id: str) -> str:
 
 
 def kill_spark_during_silver(dag: str, run_id: str) -> str:
-    wait_task(dag, run_id, "silver")
-    time.sleep(45)  # past session start, inside the build
-    container = job_container()
-    assert container, "no Spark job container"
+    """Kill Silver's own container while it runs; the gate fails unless Silver is retried."""
+    deadline = time.monotonic() + 20 * 60
+    while not (container := job_container("silver_build")):
+        assert time.monotonic() < deadline, "Silver's job container never started"
+        time.sleep(1)
+    time.sleep(10)  # past session start
     sh("docker", "kill", container)
-    return f"killed job container {container[:12]}"
+    state = wait(dag, run_id)
+    attempts = tries(dag, run_id)
+    assert state == "success" and attempts["silver"] >= 2, (state, attempts)
+    return f"killed Silver's job container {container[:12]}; Silver ran {attempts['silver']} times"
 
 
 def garage_down_before_bronze(dag: str, run_id: str) -> str:
@@ -193,11 +227,22 @@ def garage_down_before_bronze(dag: str, run_id: str) -> str:
     return "Garage stopped until Bronze failed once, then started"
 
 
-def restart_registry_during_bronze(dag: str, run_id: str) -> str:
-    wait_task(dag, run_id, "bronze")
-    time.sleep(25)
-    sh(*M2, "restart", "schema-registry")
-    return "schema registry restarted while Bronze ran"
+def registry_down_at_schema_lookup(dag: str, run_id: str, schema_id: int) -> str:
+    """Bronze must look up a schema id it has never archived while the registry is stopped."""
+    sh(*M2, "stop", "schema-registry")
+    wait_task(dag, run_id, "bronze", "up_for_retry", minutes=15)
+    sh(*M2, "start", "schema-registry")
+    state = wait(dag, run_id)
+    assert state == "success", f"run {state}"
+    runs = bronze_runs(dag, run_id)
+    (first_code, first), (last_code, last) = runs[0], runs[-1]
+    error = first.get("error", "")
+    assert first_code == 75 and f"RegistryUnavailable: schema {schema_id}:" in error, runs
+    assert last_code == 0 and last["schemas_archived"] >= 1, runs
+    return (
+        f"registry stopped before Bronze looked up new schema id {schema_id}; attempt 1 exited 75"
+        f" ({error[:160]}); attempt {len(runs)} archived it after the registry started"
+    )
 
 
 def overlapping_backfill(dag: str, run_id: str) -> str:
@@ -256,7 +301,9 @@ def main() -> None:
     scenario(evidence, "Airflow scheduler killed during Silver", 1, kill_scheduler_during_silver)
     scenario(evidence, "Spark job container killed during Silver", 2, kill_spark_during_silver)
     scenario(evidence, "Garage unavailable at Bronze", 3, garage_down_before_bronze)
-    scenario(evidence, "registry restart during Bronze", 4, restart_registry_during_bronze)
+    schema_id = fresh_schema()
+    lookup = partial(registry_down_at_schema_lookup, schema_id=schema_id)
+    scenario(evidence, "registry down at Bronze's schema lookup", 4, lookup, v2_id=schema_id)
     scenario(evidence, "backfill overlapping the pipeline", None, overlapping_backfill)
     scenario(
         evidence,

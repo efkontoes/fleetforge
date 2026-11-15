@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import time
+
 SEED, ROBOTS, TICKS, RUNS = 23, 20, 300, 5
 PARTITIONS = {
     "telemetry.raw.v1": 6,
@@ -11,7 +14,30 @@ PARTITIONS = {
 }  # same as infrastructure/kafka
 
 
-def publish(batch: int) -> int:
+def fresh_v2(stamp: str) -> str:
+    """Revision 2 with a unique doc: the same encoding, but content the registry has never seen."""
+    from fleetforge.kafka.schemas import schema_str
+
+    schema = json.loads(schema_str(2))
+    schema["doc"] = f"Gate B registry outage {stamp}"
+    return json.dumps(schema)
+
+
+def fresh_schema() -> int:
+    """Register fresh_v2 under its own subject, so its id is one Bronze has never archived."""
+    from confluent_kafka.schema_registry import Schema
+
+    from fleetforge.config import get_settings
+    from fleetforge.kafka.schemas import registry_client
+
+    stamp = str(time.time_ns())
+    client = registry_client(get_settings().schema_registry_url)
+    subject = f"gate-b.registry-outage.{stamp}-value"
+    return client.register_schema(subject, Schema(fresh_v2(stamp), "AVRO"))
+
+
+def publish(batch: int, v2_id: int | None = None) -> int:
+    """Publish one batch; v2_id, when given, replaces revision 2's schema id in the records."""
     from confluent_kafka import Producer
     from confluent_kafka.admin import AdminClient, NewTopic
 
@@ -32,6 +58,8 @@ def publish(batch: int) -> int:
         f.result(30)
     client = registry_client(s.schema_registry_url)
     ids = {rev: register(client, subject_for(TELEMETRY_TOPIC), rev) for rev in (1, 2)}
+    if v2_id is not None:
+        ids[2] = v2_id
     remap = {fx.SCHEMA_V1: ids[1], fx.SCHEMA_V2: ids[2], fx.UNKNOWN_THEN_FOUND: ids[1]}
     corpus = fx.random_corpus(SEED, robots=ROBOTS, ticks=TICKS, runs=RUNS)
     p = Producer({"bootstrap.servers": s.kafka_bootstrap, "enable.idempotence": True})

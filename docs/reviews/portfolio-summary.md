@@ -24,14 +24,17 @@ described as Terraform but never applied.
   after a measured 1.8× optimisation.
 * With records arriving all the time and a 10-minute pipeline, every record reached
   Silver within 15 minutes (p95 739 s).
-* Under Airflow, the pipeline recovered from six injected faults (scheduler, Spark and
-  object-store failures among them) on a CI runner, and reconciliation passed.
+* Under Airflow, the pipeline recovered from six injected faults on a CI runner,
+  including a killed scheduler, a killed Spark job, an object-store outage and a registry
+  outage at a real schema lookup. Each of those four failures was followed by a retry,
+  a repeated run and an overlapping backfill both succeeded, and reconciliation passed.
 
-**Not yet proven.** The AWS deployment has never been applied.
+**Not yet proven.** The AWS deployment has never been applied. One producer stall,
+seen twice in CI and never locally, is still open (issue #7).
 
 **How it was built.**
 * Every claim is backed by a test or an evidence file.
-* Every defect found on the way (18 of them) is written down with its cause and fix,
+* Every defect found on the way (20 of them) is written down with its cause and fix,
   including two in the earlier, already-audited milestone.
 * Decisions are recorded as ADRs (0001–0021).
 

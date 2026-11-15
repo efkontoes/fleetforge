@@ -10,3 +10,5 @@ backups/
 benchmarks/results/*.raw.json
 .env.lakehouse
 infrastructure/terraform/.terraform/
+*.tfstate
+*.tfstate.*
