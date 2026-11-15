@@ -2,14 +2,20 @@
 
 A fault-tolerant data platform for autonomous robot fleets. It receives
 unreliable telemetry from simulated warehouse robots, keeps a correct
-operational state, and, in later milestones, produces trustworthy historical and
-ML datasets.
+operational state, and builds a lakehouse, reproducible training datasets and a
+tracked baseline model from the same Kafka log.
+[One-page summary](docs/reviews/portfolio-summary.md) ·
+[architecture](docs/architecture/platform.md) ·
+[final engineering report](docs/reviews/fleetforge-final-engineering-report.md).
 
 | Milestone | Scope | Status |
 |---|---|---|
 | 1 | HTTP → PostgreSQL: ordering, idempotency, transactional outbox | done |
 | 2 | Kafka ingestion, batched projector, Debezium CDC, quarantine/replay, observability, roles | done |
 | 3 | Lakehouse: Kafka → Bronze → incremental Silver (Iceberg on Garage S3) → dbt Gold on Trino, dataset releases, maintenance, reconciliation | done |
+| 4 | Airflow 3.3 orchestration (jobs as containers), dbt data tests, lineage, monitoring and alerts | done |
+| 5 | Reproducible dataset export, synthetic-label baseline and boosted model, MLflow, drift | done |
+| 6 | AWS Terraform (planned and scanned, never applied), security, backup and restore test, cost model, CLI, final validation | done |
 
 ## Architecture (Milestone 2)
 
@@ -116,7 +122,40 @@ rebuild and an independent Python reference after a SIGKILL at a commit boundary
 replay adds nothing; releases reproduce after expiry; Kafka, Bronze, Silver and Gold
 reconcile. Evidence: [execution ledger](docs/reviews/platform-execution.md).
 
+Freshness, measured with records arriving all the time and the pipeline every 10
+minutes: all 19,140 records reached Silver within 15 minutes (p95 739 s), so the SLO of
+95% within 15 minutes holds. The wait for the next run dominates; each Bronze and Silver
+run took 103–124 s on one core.
+
+## Whole platform
+
+`fleetforge` (installed with the package) wraps the stacks; it prints every command it
+runs. One heavy stack at a time on a 4 GiB machine.
+
+```bash
+fleetforge env                        # .env and .env.lakehouse with random local secrets
+fleetforge up core                    # Milestone 2 Kafka + registry
+fleetforge gate a                     # Kafka -> Bronze -> Silver -> Gold -> releases -> Trino
+fleetforge gate c                     # export, train, register, drift
+fleetforge up airflow                 # Airflow on 127.0.0.1:8085 (jobs run as containers)
+fleetforge job --test-catalog reconcile
+fleetforge down
+```
+
+Gate B (Airflow under six injected faults) needs about 5.5 GiB, so it runs on a CI runner:
+add the label `gate-b` (Gate B only) or `full-system` (all three gates) to a pull request,
+or dispatch the `full-system` workflow. It passed in CI run 43664801824: six faults,
+every DAG run recovered, and reconciliation passed 11/11.
+
 ## Documentation
+* [Execution ledger](docs/reviews/platform-execution.md) (defects D1–D18, optimisations) ·
+  [fault matrix](docs/reviews/fault-matrix.md) ·
+  [lakehouse runbook](docs/operations/lakehouse-runbook.md) ·
+  [security](docs/operations/security.md) ·
+  [backup and DR](docs/operations/backup-dr.md) ·
+  ADRs [0019](docs/adr/0019-orchestration-airflow-jobs-as-containers.md) orchestration ·
+  [0020](docs/adr/0020-ml-dataset-and-baseline.md) ML ·
+  [0021](docs/adr/0021-aws-deployment-shape.md) AWS
 * [Milestone 3 specification](docs/architecture/milestone-3.md) (contracts, gaps, layers, failure rules, test evidence) ·
   [table schemas](docs/architecture/milestone-3-tables.md) ·
   [learning guide](docs/learning/milestone-3.md) ·

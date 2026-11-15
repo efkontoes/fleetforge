@@ -44,6 +44,7 @@ fleet-mission-consumer = "fleetforge.projector.missions:main"
 fleet-replay = "fleetforge.projector.replay:main"
 fleet-schemas = "fleetforge.kafka.schemas:main"
 fleet-ops-exporter = "fleetforge.ops.exporter:main"
+fleetforge = "fleetforge.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

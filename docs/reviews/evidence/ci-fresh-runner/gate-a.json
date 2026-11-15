@@ -1,0 +1,1307 @@
+{
+  "bronze_run_0": {
+    "lineage": {
+      "inputs": [
+        {
+          "facets": {},
+          "name": "gate.941598a4.telemetry",
+          "namespace": "kafka://kafka:9092"
+        },
+        {
+          "facets": {},
+          "name": "gate.941598a4.robots",
+          "namespace": "kafka://kafka:9092"
+        },
+        {
+          "facets": {},
+          "name": "gate.941598a4.missions",
+          "namespace": "kafka://kafka:9092"
+        },
+        {
+          "facets": {},
+          "name": "gate.941598a4.firmware",
+          "namespace": "kafka://kafka:9092"
+        }
+      ],
+      "outputs": [
+        {
+          "facets": {
+            "version": {
+              "_producer": "https://github.com/efkontoes/fleetforge",
+              "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json",
+              "datasetVersion": "26131362930686993"
+            }
+          },
+          "name": "bronze.kafka_records",
+          "namespace": "iceberg://lake"
+        }
+      ]
+    },
+    "new_rows": 28559,
+    "notes": [
+      "first ingestion of this topic incarnation",
+      "first ingestion of this topic incarnation",
+      "first ingestion of this topic incarnation",
+      "first ingestion of this topic incarnation"
+    ],
+    "ranges": 5,
+    "run_id": "bronze-6a5d408e-5c78-40b1-b46e-4df9e843bc71",
+    "schemas_archived": 3,
+    "snapshot_id": 26131362930686993
+  },
+  "bronze_run_1": {
+    "lineage": {
+      "inputs": [
+        {
+          "facets": {},
+          "name": "gate.941598a4.telemetry",
+          "namespace": "kafka://kafka:9092"
+        },
+        {
+          "facets": {},
+          "name": "gate.941598a4.robots",
+          "namespace": "kafka://kafka:9092"
+        },
+        {
+          "facets": {},
+          "name": "gate.941598a4.missions",
+          "namespace": "kafka://kafka:9092"
+        },
+        {
+          "facets": {},
+          "name": "gate.941598a4.firmware",
+          "namespace": "kafka://kafka:9092"
+        }
+      ],
+      "outputs": [
+        {
+          "facets": {
+            "version": {
+              "_producer": "https://github.com/efkontoes/fleetforge",
+              "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json",
+              "datasetVersion": "1795164736957417796"
+            }
+          },
+          "name": "bronze.kafka_records",
+          "namespace": "iceberg://lake"
+        }
+      ]
+    },
+    "new_rows": 15666,
+    "notes": [],
+    "ranges": 3,
+    "run_id": "bronze-2a1216e4-33d9-4969-ab59-e5b7b02398f3",
+    "schemas_archived": 0,
+    "snapshot_id": 1795164736957417796
+  },
+  "bronze_run_2": {
+    "lineage": {
+      "inputs": [
+        {
+          "facets": {},
+          "name": "gate.941598a4.telemetry",
+          "namespace": "kafka://kafka:9092"
+        },
+        {
+          "facets": {},
+          "name": "gate.941598a4.robots",
+          "namespace": "kafka://kafka:9092"
+        },
+        {
+          "facets": {},
+          "name": "gate.941598a4.missions",
+          "namespace": "kafka://kafka:9092"
+        },
+        {
+          "facets": {},
+          "name": "gate.941598a4.firmware",
+          "namespace": "kafka://kafka:9092"
+        }
+      ],
+      "outputs": [
+        {
+          "facets": {
+            "version": {
+              "_producer": "https://github.com/efkontoes/fleetforge",
+              "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json",
+              "datasetVersion": "5455762213558705819"
+            }
+          },
+          "name": "bronze.kafka_records",
+          "namespace": "iceberg://lake"
+        }
+      ]
+    },
+    "new_rows": 2456,
+    "notes": [],
+    "ranges": 4,
+    "run_id": "bronze-541f03f5-bb3c-4266-8d17-f57135423778",
+    "schemas_archived": 0,
+    "snapshot_id": 5455762213558705819
+  },
+  "bronze_run_3": {
+    "lineage": {
+      "inputs": [
+        {
+          "facets": {},
+          "name": "gate.941598a4.telemetry",
+          "namespace": "kafka://kafka:9092"
+        },
+        {
+          "facets": {},
+          "name": "gate.941598a4.robots",
+          "namespace": "kafka://kafka:9092"
+        },
+        {
+          "facets": {},
+          "name": "gate.941598a4.missions",
+          "namespace": "kafka://kafka:9092"
+        },
+        {
+          "facets": {},
+          "name": "gate.941598a4.firmware",
+          "namespace": "kafka://kafka:9092"
+        }
+      ],
+      "outputs": [
+        {
+          "facets": {
+            "version": {
+              "_producer": "https://github.com/efkontoes/fleetforge",
+              "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json",
+              "datasetVersion": "2422126647509037296"
+            }
+          },
+          "name": "bronze.kafka_records",
+          "namespace": "iceberg://lake"
+        }
+      ]
+    },
+    "new_rows": 63,
+    "notes": [],
+    "ranges": 4,
+    "run_id": "bronze-6d9bf7e4-8293-4762-99a1-917575591862",
+    "schemas_archived": 0,
+    "snapshot_id": 2422126647509037296
+  },
+  "builds": [
+    {
+      "archive_fingerprint": "7c2a7c6a3589f3c264263b43f3613216b6a17c969539ccbaf4c03ce5d49ca703",
+      "archive_snapshot_id": 6689647788715196444,
+      "base_build_id": null,
+      "bronze_max_ingested_at": "2026-11-14 22:12:01.412728",
+      "bronze_snapshot_id": 26131362930686993,
+      "build_id": "1c5d9a0f9fb9b2e76873ff05",
+      "committed_at": "2026-11-14 22:13:27.039404+00:00",
+      "events_snapshot_id": 8469664382981298523,
+      "lineage": {
+        "inputs": [
+          {
+            "facets": {
+              "version": {
+                "_producer": "https://github.com/efkontoes/fleetforge",
+                "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json",
+                "datasetVersion": "26131362930686993"
+              }
+            },
+            "name": "bronze.kafka_records",
+            "namespace": "iceberg://lake"
+          },
+          {
+            "facets": {
+              "version": {
+                "_producer": "https://github.com/efkontoes/fleetforge",
+                "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json",
+                "datasetVersion": "6689647788715196444"
+              }
+            },
+            "name": "bronze.registry_schemas",
+            "namespace": "iceberg://lake"
+          }
+        ],
+        "outputs": [
+          {
+            "facets": {
+              "version": {
+                "_producer": "https://github.com/efkontoes/fleetforge",
+                "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json",
+                "datasetVersion": "6946022980043142788"
+              }
+            },
+            "name": "silver.telemetry_prepared",
+            "namespace": "iceberg://lake"
+          },
+          {
+            "facets": {
+              "version": {
+                "_producer": "https://github.com/efkontoes/fleetforge",
+                "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json",
+                "datasetVersion": "305533798374722773"
+              }
+            },
+            "name": "silver.telemetry_record_outcomes",
+            "namespace": "iceberg://lake"
+          },
+          {
+            "facets": {
+              "version": {
+                "_producer": "https://github.com/efkontoes/fleetforge",
+                "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json",
+                "datasetVersion": "8469664382981298523"
+              }
+            },
+            "name": "silver.telemetry_events",
+            "namespace": "iceberg://lake"
+          }
+        ]
+      },
+      "mode": "FULL",
+      "new_bronze_rows": 28513,
+      "outcomes_snapshot_id": 305533798374722773,
+      "prepared_snapshot_id": 6946022980043142788,
+      "reference_fingerprint": "a21cfff06bce8da9fe6720fa2dc07cc9e216c322f28b1033c6082aef4a1d1ca3",
+      "reprepared_rows": 0,
+      "scope_robots": 40,
+      "scope_rows": 28513,
+      "status": "built",
+      "telemetry_rows": 28513,
+      "timings_s": {
+        "build_log": 1.0,
+        "plan": 9.0,
+        "reference_tables": 21.3,
+        "row_stage": 7.7,
+        "scope": 4.8
+      },
+      "transform_version": "silver-telemetry/3"
+    },
+    {
+      "archive_fingerprint": "7c2a7c6a3589f3c264263b43f3613216b6a17c969539ccbaf4c03ce5d49ca703",
+      "archive_snapshot_id": 6689647788715196444,
+      "base_build_id": "1c5d9a0f9fb9b2e76873ff05",
+      "bronze_max_ingested_at": "2026-11-14 22:13:29.548194",
+      "bronze_snapshot_id": 1795164736957417796,
+      "build_id": "e3f006d4ba4413acd0acd0fa",
+      "committed_at": "2026-11-14 22:16:06.298378+00:00",
+      "events_snapshot_id": 649377795049596689,
+      "lineage": {
+        "inputs": [
+          {
+            "facets": {
+              "version": {
+                "_producer": "https://github.com/efkontoes/fleetforge",
+                "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json",
+                "datasetVersion": "1795164736957417796"
+              }
+            },
+            "name": "bronze.kafka_records",
+            "namespace": "iceberg://lake"
+          },
+          {
+            "facets": {
+              "version": {
+                "_producer": "https://github.com/efkontoes/fleetforge",
+                "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json",
+                "datasetVersion": "6689647788715196444"
+              }
+            },
+            "name": "bronze.registry_schemas",
+            "namespace": "iceberg://lake"
+          }
+        ],
+        "outputs": [
+          {
+            "facets": {
+              "version": {
+                "_producer": "https://github.com/efkontoes/fleetforge",
+                "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json",
+                "datasetVersion": "8423440558749616271"
+              }
+            },
+            "name": "silver.telemetry_prepared",
+            "namespace": "iceberg://lake"
+          },
+          {
+            "facets": {
+              "version": {
+                "_producer": "https://github.com/efkontoes/fleetforge",
+                "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json",
+                "datasetVersion": "2637720964438558944"
+              }
+            },
+            "name": "silver.telemetry_record_outcomes",
+            "namespace": "iceberg://lake"
+          },
+          {
+            "facets": {
+              "version": {
+                "_producer": "https://github.com/efkontoes/fleetforge",
+                "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json",
+                "datasetVersion": "649377795049596689"
+              }
+            },
+            "name": "silver.telemetry_events",
+            "namespace": "iceberg://lake"
+          }
+        ]
+      },
+      "mode": "INCREMENTAL",
+      "new_bronze_rows": 15666,
+      "outcomes_snapshot_id": 2637720964438558944,
+      "prepared_snapshot_id": 8423440558749616271,
+      "reference_fingerprint": "a21cfff06bce8da9fe6720fa2dc07cc9e216c322f28b1033c6082aef4a1d1ca3",
+      "reprepared_rows": 0,
+      "scope_robots": 39,
+      "scope_rows": 20689,
+      "status": "built",
+      "telemetry_rows": 44179,
+      "timings_s": {
+        "build_log": 0.9,
+        "events_swap": 12.8,
+        "outcomes_merge": 13.8,
+        "plan": 11.3,
+        "prepared_merge": 7.3,
+        "reference_tables": 1.0,
+        "row_stage": 5.6,
+        "scope": 9.6
+      },
+      "transform_version": "silver-telemetry/3"
+    },
+    {
+      "archive_fingerprint": "7c2a7c6a3589f3c264263b43f3613216b6a17c969539ccbaf4c03ce5d49ca703",
+      "archive_snapshot_id": 6689647788715196444,
+      "base_build_id": "e3f006d4ba4413acd0acd0fa",
+      "bronze_max_ingested_at": "2026-11-14 22:16:09.717429",
+      "bronze_snapshot_id": 5455762213558705819,
+      "build_id": "0556840ca932c0a912199dde",
+      "committed_at": "2026-11-14 22:17:47.465723+00:00",
+      "events_snapshot_id": 424276824303498317,
+      "lineage": {
+        "inputs": [
+          {
+            "facets": {
+              "version": {
+                "_producer": "https://github.com/efkontoes/fleetforge",
+                "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json",
+                "datasetVersion": "5455762213558705819"
+              }
+            },
+            "name": "bronze.kafka_records",
+            "namespace": "iceberg://lake"
+          },
+          {
+            "facets": {
+              "version": {
+                "_producer": "https://github.com/efkontoes/fleetforge",
+                "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json",
+                "datasetVersion": "6689647788715196444"
+              }
+            },
+            "name": "bronze.registry_schemas",
+            "namespace": "iceberg://lake"
+          }
+        ],
+        "outputs": [
+          {
+            "facets": {
+              "version": {
+                "_producer": "https://github.com/efkontoes/fleetforge",
+                "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json",
+                "datasetVersion": "8723194045858712968"
+              }
+            },
+            "name": "silver.telemetry_prepared",
+            "namespace": "iceberg://lake"
+          },
+          {
+            "facets": {
+              "version": {
+                "_producer": "https://github.com/efkontoes/fleetforge",
+                "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json",
+                "datasetVersion": "4174316669938274200"
+              }
+            },
+            "name": "silver.telemetry_record_outcomes",
+            "namespace": "iceberg://lake"
+          },
+          {
+            "facets": {
+              "version": {
+                "_producer": "https://github.com/efkontoes/fleetforge",
+                "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json",
+                "datasetVersion": "424276824303498317"
+              }
+            },
+            "name": "silver.telemetry_events",
+            "namespace": "iceberg://lake"
+          }
+        ]
+      },
+      "mode": "INCREMENTAL",
+      "new_bronze_rows": 2455,
+      "outcomes_snapshot_id": 4174316669938274200,
+      "prepared_snapshot_id": 8723194045858712968,
+      "reference_fingerprint": "d612aaf9cb268ac13dcc6941894ff929eb9a1d40f2c4efa24f971e3b53d36b63",
+      "reprepared_rows": 13260,
+      "scope_robots": 39,
+      "scope_rows": 18904,
+      "status": "built",
+      "telemetry_rows": 46634,
+      "timings_s": {
+        "build_log": 0.6,
+        "events_swap": 10.3,
+        "outcomes_merge": 10.8,
+        "plan": 13.0,
+        "prepared_merge": 7.7,
+        "reference_tables": 0.9,
+        "row_stage": 6.1,
+        "scope": 11.2
+      },
+      "transform_version": "silver-telemetry/3"
+    },
+    {
+      "archive_fingerprint": "7c2a7c6a3589f3c264263b43f3613216b6a17c969539ccbaf4c03ce5d49ca703",
+      "archive_snapshot_id": 6689647788715196444,
+      "base_build_id": "0556840ca932c0a912199dde",
+      "bronze_max_ingested_at": "2026-11-14 22:18:19.176188",
+      "bronze_snapshot_id": 2422126647509037296,
+      "build_id": "8f076cd8557ca5779cbb6d90",
+      "committed_at": "2026-11-14 22:19:50.827733+00:00",
+      "events_snapshot_id": 6491336817943045242,
+      "lineage": {
+        "inputs": [
+          {
+            "facets": {
+              "version": {
+                "_producer": "https://github.com/efkontoes/fleetforge",
+                "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json",
+                "datasetVersion": "2422126647509037296"
+              }
+            },
+            "name": "bronze.kafka_records",
+            "namespace": "iceberg://lake"
+          },
+          {
+            "facets": {
+              "version": {
+                "_producer": "https://github.com/efkontoes/fleetforge",
+                "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json",
+                "datasetVersion": "6689647788715196444"
+              }
+            },
+            "name": "bronze.registry_schemas",
+            "namespace": "iceberg://lake"
+          }
+        ],
+        "outputs": [
+          {
+            "facets": {
+              "version": {
+                "_producer": "https://github.com/efkontoes/fleetforge",
+                "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json",
+                "datasetVersion": "8148605378406700741"
+              }
+            },
+            "name": "silver.telemetry_prepared",
+            "namespace": "iceberg://lake"
+          },
+          {
+            "facets": {
+              "version": {
+                "_producer": "https://github.com/efkontoes/fleetforge",
+                "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json",
+                "datasetVersion": "4280054002479688465"
+              }
+            },
+            "name": "silver.telemetry_record_outcomes",
+            "namespace": "iceberg://lake"
+          },
+          {
+            "facets": {
+              "version": {
+                "_producer": "https://github.com/efkontoes/fleetforge",
+                "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json",
+                "datasetVersion": "6491336817943045242"
+              }
+            },
+            "name": "silver.telemetry_events",
+            "namespace": "iceberg://lake"
+          }
+        ]
+      },
+      "mode": "INCREMENTAL",
+      "new_bronze_rows": 62,
+      "outcomes_snapshot_id": 4280054002479688465,
+      "prepared_snapshot_id": 8148605378406700741,
+      "reference_fingerprint": "512ef33ba4d7494e7f586106a6bee708a72cb7baeb9a684b5d8a9eaea1724e1a",
+      "reprepared_rows": 1163,
+      "scope_robots": 27,
+      "scope_rows": 2785,
+      "status": "built",
+      "telemetry_rows": 46696,
+      "timings_s": {
+        "build_log": 0.8,
+        "events_swap": 8.5,
+        "outcomes_merge": 10.0,
+        "plan": 12.4,
+        "prepared_merge": 5.7,
+        "reference_tables": 1.3,
+        "row_stage": 4.3,
+        "scope": 12.8
+      },
+      "transform_version": "silver-telemetry/3"
+    }
+  ],
+  "full_build": {
+    "archive_fingerprint": "7c2a7c6a3589f3c264263b43f3613216b6a17c969539ccbaf4c03ce5d49ca703",
+    "archive_snapshot_id": 6689647788715196444,
+    "base_build_id": null,
+    "bronze_max_ingested_at": "2026-11-14 22:18:19.176188",
+    "bronze_snapshot_id": 1658318627775239474,
+    "build_id": "290adc569aac0a3844b6d43d",
+    "committed_at": "2026-11-14 22:22:44.582213+00:00",
+    "events_snapshot_id": 6392679245780112020,
+    "lineage": {
+      "inputs": [
+        {
+          "facets": {
+            "version": {
+              "_producer": "https://github.com/efkontoes/fleetforge",
+              "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json",
+              "datasetVersion": "1658318627775239474"
+            }
+          },
+          "name": "bronze.kafka_records",
+          "namespace": "iceberg://lake"
+        },
+        {
+          "facets": {
+            "version": {
+              "_producer": "https://github.com/efkontoes/fleetforge",
+              "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json",
+              "datasetVersion": "6689647788715196444"
+            }
+          },
+          "name": "bronze.registry_schemas",
+          "namespace": "iceberg://lake"
+        }
+      ],
+      "outputs": [
+        {
+          "facets": {
+            "version": {
+              "_producer": "https://github.com/efkontoes/fleetforge",
+              "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json",
+              "datasetVersion": "1239016064434645944"
+            }
+          },
+          "name": "silver.telemetry_prepared",
+          "namespace": "iceberg://lake"
+        },
+        {
+          "facets": {
+            "version": {
+              "_producer": "https://github.com/efkontoes/fleetforge",
+              "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json",
+              "datasetVersion": "3251034757529604768"
+            }
+          },
+          "name": "silver.telemetry_record_outcomes",
+          "namespace": "iceberg://lake"
+        },
+        {
+          "facets": {
+            "version": {
+              "_producer": "https://github.com/efkontoes/fleetforge",
+              "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json",
+              "datasetVersion": "6392679245780112020"
+            }
+          },
+          "name": "silver.telemetry_events",
+          "namespace": "iceberg://lake"
+        }
+      ]
+    },
+    "mode": "FULL",
+    "new_bronze_rows": 46696,
+    "outcomes_snapshot_id": 3251034757529604768,
+    "prepared_snapshot_id": 1239016064434645944,
+    "reference_fingerprint": "512ef33ba4d7494e7f586106a6bee708a72cb7baeb9a684b5d8a9eaea1724e1a",
+    "reprepared_rows": 0,
+    "scope_robots": 40,
+    "scope_rows": 46696,
+    "status": "built",
+    "telemetry_rows": 46696,
+    "timings_s": {
+      "build_log": 0.8,
+      "plan": 8.9,
+      "reference_tables": 22.9,
+      "row_stage": 9.8,
+      "scope": 5.7
+    },
+    "transform_version": "silver-telemetry/3"
+  },
+  "full_digest": {
+    "bronze_rows": 46744,
+    "build_id": "290adc569aac0a3844b6d43d",
+    "events": "43bbf0a9b033f8b4073604e97baae621a8f2c27721da98496cd5a81665a7c562",
+    "events_rows": 27942,
+    "final_days": 27,
+    "mode": "FULL",
+    "outcome_rows": 46696,
+    "outcomes": "5d2bcaf19d4e7c06002d1f6d7858771317f0714330e74f4a355085f56e505719",
+    "reference_events": "43bbf0a9b033f8b4073604e97baae621a8f2c27721da98496cd5a81665a7c562",
+    "reference_outcomes": "5d2bcaf19d4e7c06002d1f6d7858771317f0714330e74f4a355085f56e505719",
+    "telemetry_rows": 46696
+  },
+  "gate_id": "941598a4",
+  "gold_checks": {
+    "first": {
+      "pipeline_daily_quality": 0,
+      "pipeline_daily_rates": 0,
+      "robot_daily_telemetry": 0
+    },
+    "frozen": {
+      "pipeline_daily_quality": 0,
+      "pipeline_daily_rates": 0,
+      "robot_daily_telemetry": 0
+    },
+    "reopened": {
+      "pipeline_daily_quality": 0,
+      "pipeline_daily_rates": 0,
+      "robot_daily_telemetry": 0
+    }
+  },
+  "gold_rows": {
+    "final": 27,
+    "rows": 28
+  },
+  "incremental_digest": {
+    "build_id": "8f076cd8557ca5779cbb6d90",
+    "events": "43bbf0a9b033f8b4073604e97baae621a8f2c27721da98496cd5a81665a7c562",
+    "events_rows": 27942,
+    "mode": "INCREMENTAL",
+    "outcome_rows": 46696,
+    "outcomes": "5d2bcaf19d4e7c06002d1f6d7858771317f0714330e74f4a355085f56e505719"
+  },
+  "maintenance": [
+    {
+      "data_bytes": 4303929,
+      "data_files": 8,
+      "expired_snapshots": 2,
+      "measured_at": "2026-11-14 22:23:56.129911+00:00",
+      "orphan_files": 0,
+      "records": 46744,
+      "run_id": "921eff95ab3b4150b2523a5392002bae",
+      "small_files": 8,
+      "snapshots": 3,
+      "table_name": "bronze.kafka_records",
+      "tags": 3
+    },
+    {
+      "data_bytes": 9180,
+      "data_files": 1,
+      "expired_snapshots": 0,
+      "measured_at": "2026-11-14 22:23:56.129911+00:00",
+      "orphan_files": 0,
+      "records": 3,
+      "run_id": "921eff95ab3b4150b2523a5392002bae",
+      "small_files": 1,
+      "snapshots": 1,
+      "table_name": "bronze.registry_schemas",
+      "tags": 1
+    },
+    {
+      "data_bytes": 1388085,
+      "data_files": 15,
+      "expired_snapshots": 2,
+      "measured_at": "2026-11-14 22:23:56.129911+00:00",
+      "orphan_files": 0,
+      "records": 27942,
+      "run_id": "921eff95ab3b4150b2523a5392002bae",
+      "small_files": 15,
+      "snapshots": 3,
+      "table_name": "silver.telemetry_events",
+      "tags": 2
+    },
+    {
+      "data_bytes": 1857515,
+      "data_files": 4,
+      "expired_snapshots": 3,
+      "measured_at": "2026-11-14 22:23:56.129911+00:00",
+      "orphan_files": 0,
+      "records": 46696,
+      "run_id": "921eff95ab3b4150b2523a5392002bae",
+      "small_files": 4,
+      "snapshots": 3,
+      "table_name": "silver.telemetry_record_outcomes",
+      "tags": 2
+    },
+    {
+      "data_bytes": 3972,
+      "data_files": 1,
+      "expired_snapshots": 3,
+      "measured_at": "2026-11-14 22:23:56.129911+00:00",
+      "orphan_files": 0,
+      "records": 4,
+      "run_id": "921eff95ab3b4150b2523a5392002bae",
+      "small_files": 1,
+      "snapshots": 2,
+      "table_name": "silver.firmware_contracts",
+      "tags": 0
+    },
+    {
+      "data_bytes": 4851,
+      "data_files": 1,
+      "expired_snapshots": 3,
+      "measured_at": "2026-11-14 22:23:56.129911+00:00",
+      "orphan_files": 0,
+      "records": 40,
+      "run_id": "921eff95ab3b4150b2523a5392002bae",
+      "small_files": 1,
+      "snapshots": 2,
+      "table_name": "silver.robot_registry",
+      "tags": 0
+    },
+    {
+      "data_bytes": 4127505,
+      "data_files": 16,
+      "expired_snapshots": 4,
+      "measured_at": "2026-11-14 22:23:56.129911+00:00",
+      "orphan_files": 0,
+      "records": 46696,
+      "run_id": "921eff95ab3b4150b2523a5392002bae",
+      "small_files": 16,
+      "snapshots": 2,
+      "table_name": "silver.telemetry_prepared",
+      "tags": 0
+    },
+    {
+      "data_bytes": 37667,
+      "data_files": 5,
+      "expired_snapshots": 3,
+      "measured_at": "2026-11-14 22:23:56.129911+00:00",
+      "orphan_files": 0,
+      "records": 5,
+      "run_id": "921eff95ab3b4150b2523a5392002bae",
+      "small_files": 5,
+      "snapshots": 2,
+      "table_name": "silver.build_log",
+      "tags": 0
+    },
+    {
+      "data_bytes": 2424951,
+      "data_files": 2,
+      "expired_snapshots": 1,
+      "measured_at": "2026-11-14 22:23:56.129911+00:00",
+      "orphan_files": 0,
+      "records": 55841,
+      "run_id": "921eff95ab3b4150b2523a5392002bae",
+      "small_files": 2,
+      "snapshots": 3,
+      "table_name": "gold.robot_state_observations",
+      "tags": 2
+    },
+    {
+      "data_bytes": 16652,
+      "data_files": 2,
+      "expired_snapshots": 0,
+      "measured_at": "2026-11-14 22:23:56.129911+00:00",
+      "orphan_files": 0,
+      "records": 2,
+      "run_id": "921eff95ab3b4150b2523a5392002bae",
+      "small_files": 2,
+      "snapshots": 2,
+      "table_name": "gold.training_dataset_releases",
+      "tags": 0
+    }
+  ],
+  "published": {
+    "0": {
+      "gate.941598a4.firmware": 7,
+      "gate.941598a4.robots": 39,
+      "gate.941598a4.telemetry": 28513
+    },
+    "1": {
+      "gate.941598a4.telemetry": 15666
+    },
+    "2": {
+      "gate.941598a4.firmware": 1,
+      "gate.941598a4.telemetry": 2455
+    },
+    "3": {
+      "gate.941598a4.robots": 1,
+      "gate.941598a4.telemetry": 62
+    }
+  },
+  "reconcile": [
+    {
+      "actual": "46744",
+      "check_name": "bronze_coordinates_unique",
+      "checked_at": "2026-11-14 22:25:52.747176+00:00",
+      "detail": "one row per (topic id, partition, offset)",
+      "expected": "46744",
+      "passed": true,
+      "run_id": "822c14177ac64aaf996408c04b458028",
+      "silver_build_id": "290adc569aac0a3844b6d43d"
+    },
+    {
+      "actual": "46696",
+      "check_name": "bronze_equals_outcomes",
+      "checked_at": "2026-11-14 22:25:53.805959+00:00",
+      "detail": "accepted + duplicate + rejected + unresolved = {'ACCEPTED': 27942, 'UNRESOLVED': 3, 'REJECTED': 17396, 'DUPLICATE': 1355}",
+      "expected": "46696",
+      "passed": true,
+      "run_id": "822c14177ac64aaf996408c04b458028",
+      "silver_build_id": "290adc569aac0a3844b6d43d"
+    },
+    {
+      "actual": "46696",
+      "check_name": "outcomes_one_per_record",
+      "checked_at": "2026-11-14 22:25:54.443545+00:00",
+      "detail": null,
+      "expected": "46696",
+      "passed": true,
+      "run_id": "822c14177ac64aaf996408c04b458028",
+      "silver_build_id": "290adc569aac0a3844b6d43d"
+    },
+    {
+      "actual": "6392679245780112020",
+      "check_name": "unchanged_since_build:telemetry_events",
+      "checked_at": "2026-11-14 22:25:54.466179+00:00",
+      "detail": "written only by Silver builds",
+      "expected": "6392679245780112020",
+      "passed": true,
+      "run_id": "822c14177ac64aaf996408c04b458028",
+      "silver_build_id": "290adc569aac0a3844b6d43d"
+    },
+    {
+      "actual": "3251034757529604768",
+      "check_name": "unchanged_since_build:telemetry_record_outcomes",
+      "checked_at": "2026-11-14 22:25:54.469963+00:00",
+      "detail": "written only by Silver builds",
+      "expected": "3251034757529604768",
+      "passed": true,
+      "run_id": "822c14177ac64aaf996408c04b458028",
+      "silver_build_id": "290adc569aac0a3844b6d43d"
+    },
+    {
+      "actual": "27942",
+      "check_name": "events_equal_accepted",
+      "checked_at": "2026-11-14 22:25:55.251899+00:00",
+      "detail": null,
+      "expected": "27942",
+      "passed": true,
+      "run_id": "822c14177ac64aaf996408c04b458028",
+      "silver_build_id": "290adc569aac0a3844b6d43d"
+    },
+    {
+      "actual": "27942",
+      "check_name": "event_ids_unique",
+      "checked_at": "2026-11-14 22:25:55.251917+00:00",
+      "detail": null,
+      "expected": "27942",
+      "passed": true,
+      "run_id": "822c14177ac64aaf996408c04b458028",
+      "silver_build_id": "290adc569aac0a3844b6d43d"
+    },
+    {
+      "actual": "27938",
+      "check_name": "release_rows:gate-r2",
+      "checked_at": "2026-11-14 22:25:55.794024+00:00",
+      "detail": null,
+      "expected": "27938",
+      "passed": true,
+      "run_id": "822c14177ac64aaf996408c04b458028",
+      "silver_build_id": "290adc569aac0a3844b6d43d"
+    },
+    {
+      "actual": "27903",
+      "check_name": "release_rows:gate-r1",
+      "checked_at": "2026-11-14 22:25:56.026561+00:00",
+      "detail": null,
+      "expected": "27903",
+      "passed": true,
+      "run_id": "822c14177ac64aaf996408c04b458028",
+      "silver_build_id": "290adc569aac0a3844b6d43d"
+    },
+    {
+      "actual": "{\"1\": 12859, \"2\": 17526, \"0\": 16311}",
+      "check_name": "kafka_vs_bronze:gate.941598a4.telemetry",
+      "checked_at": "2026-11-14 22:26:01.036795+00:00",
+      "detail": "Kafka records below Bronze's checkpoint, per partition",
+      "expected": "{\"1\": 12859, \"2\": 17526, \"0\": 16311}",
+      "passed": true,
+      "run_id": "822c14177ac64aaf996408c04b458028",
+      "silver_build_id": "290adc569aac0a3844b6d43d"
+    }
+  ],
+  "release_new": {
+    "bronze_snapshot_id": 1658318627775239474,
+    "content_sha256": "be35d878a6ae4b4d2a139f17575a4223f16cdad627f23bf72899fb10a41f768d",
+    "created_at": "2026-11-14 22:23:45.065803+00:00",
+    "feature_schema_version": "robot-state/1",
+    "known_limitations": "Synthetic fleet data. Episodes are boots until missions are specified (gap G7). Velocities are finite differences of reported positions, not measurements. No labels: the release is a candidate until learning-readiness checks pass.",
+    "lineage": {
+      "inputs": [
+        {
+          "facets": {
+            "version": {
+              "_producer": "https://github.com/efkontoes/fleetforge",
+              "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json",
+              "datasetVersion": "6392679245780112020"
+            }
+          },
+          "name": "silver.telemetry_events",
+          "namespace": "iceberg://lake"
+        }
+      ],
+      "outputs": [
+        {
+          "facets": {
+            "version": {
+              "_producer": "https://github.com/efkontoes/fleetforge",
+              "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json",
+              "datasetVersion": "8481246872760089418"
+            }
+          },
+          "name": "gold.robot_state_observations",
+          "namespace": "iceberg://lake"
+        }
+      ]
+    },
+    "observations_snapshot_id": 8481246872760089418,
+    "readiness": "CANDIDATE",
+    "release_id": "gate-r2",
+    "rows_test": 4125,
+    "rows_total": 27938,
+    "rows_train": 20698,
+    "rows_validation": 3115,
+    "selection": "{\"events\": \"current versions only (is_current)\", \"exclusions\": []}",
+    "silver_build_id": "290adc569aac0a3844b6d43d",
+    "silver_events_snapshot_id": 6392679245780112020,
+    "silver_outcomes_snapshot_id": 3251034757529604768,
+    "split_seed": "g2",
+    "status": "created",
+    "transform_version": "silver-telemetry/3"
+  },
+  "release_old": {
+    "bronze_snapshot_id": 5455762213558705819,
+    "content_sha256": "6cdc8481c615730eebd84ac8ff439574719513b07f28961db5ebaab1a918a7b1",
+    "created_at": "2026-11-14 22:18:15.884430+00:00",
+    "feature_schema_version": "robot-state/1",
+    "known_limitations": "Synthetic fleet data. Episodes are boots until missions are specified (gap G7). Velocities are finite differences of reported positions, not measurements. No labels: the release is a candidate until learning-readiness checks pass.",
+    "lineage": {
+      "inputs": [
+        {
+          "facets": {
+            "version": {
+              "_producer": "https://github.com/efkontoes/fleetforge",
+              "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json",
+              "datasetVersion": "424276824303498317"
+            }
+          },
+          "name": "silver.telemetry_events",
+          "namespace": "iceberg://lake"
+        }
+      ],
+      "outputs": [
+        {
+          "facets": {
+            "version": {
+              "_producer": "https://github.com/efkontoes/fleetforge",
+              "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json",
+              "datasetVersion": "445316923089573029"
+            }
+          },
+          "name": "gold.robot_state_observations",
+          "namespace": "iceberg://lake"
+        }
+      ]
+    },
+    "observations_snapshot_id": 445316923089573029,
+    "readiness": "CANDIDATE",
+    "release_id": "gate-r1",
+    "rows_test": 4029,
+    "rows_total": 27903,
+    "rows_train": 19333,
+    "rows_validation": 4541,
+    "selection": "{\"events\": \"current versions only (is_current)\", \"exclusions\": []}",
+    "silver_build_id": "0556840ca932c0a912199dde",
+    "silver_events_snapshot_id": 424276824303498317,
+    "silver_outcomes_snapshot_id": 4174316669938274200,
+    "split_seed": "g1",
+    "status": "created",
+    "transform_version": "silver-telemetry/3"
+  },
+  "replay": {
+    "lineage": {
+      "inputs": [
+        {
+          "facets": {},
+          "name": "gate.941598a4.telemetry",
+          "namespace": "kafka://kafka:9092"
+        },
+        {
+          "facets": {},
+          "name": "gate.941598a4.robots",
+          "namespace": "kafka://kafka:9092"
+        },
+        {
+          "facets": {},
+          "name": "gate.941598a4.missions",
+          "namespace": "kafka://kafka:9092"
+        },
+        {
+          "facets": {},
+          "name": "gate.941598a4.firmware",
+          "namespace": "kafka://kafka:9092"
+        }
+      ],
+      "outputs": [
+        {
+          "facets": {
+            "version": {
+              "_producer": "https://github.com/efkontoes/fleetforge",
+              "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json",
+              "datasetVersion": "1658318627775239474"
+            }
+          },
+          "name": "bronze.kafka_records",
+          "namespace": "iceberg://lake"
+        }
+      ]
+    },
+    "new_rows": 0,
+    "notes": [
+      "first ingestion of this topic incarnation",
+      "first ingestion of this topic incarnation",
+      "first ingestion of this topic incarnation",
+      "first ingestion of this topic incarnation"
+    ],
+    "ranges": 5,
+    "run_id": "bronze-ee511c2b-49ac-41f5-b0d7-e4e471fd96fe",
+    "schemas_archived": 0,
+    "snapshot_id": 1658318627775239474
+  },
+  "reproduce_after_new_builds": {
+    "match": true,
+    "recomputed": "6cdc8481c615730eebd84ac8ff439574719513b07f28961db5ebaab1a918a7b1",
+    "recorded": "6cdc8481c615730eebd84ac8ff439574719513b07f28961db5ebaab1a918a7b1",
+    "release_id": "gate-r1",
+    "stored": "6cdc8481c615730eebd84ac8ff439574719513b07f28961db5ebaab1a918a7b1"
+  },
+  "reproduce_gate-r1_after_expiry": {
+    "match": true,
+    "recomputed": "6cdc8481c615730eebd84ac8ff439574719513b07f28961db5ebaab1a918a7b1",
+    "recorded": "6cdc8481c615730eebd84ac8ff439574719513b07f28961db5ebaab1a918a7b1",
+    "release_id": "gate-r1",
+    "stored": "6cdc8481c615730eebd84ac8ff439574719513b07f28961db5ebaab1a918a7b1"
+  },
+  "reproduce_gate-r2_after_expiry": {
+    "match": true,
+    "recomputed": "be35d878a6ae4b4d2a139f17575a4223f16cdad627f23bf72899fb10a41f768d",
+    "recorded": "be35d878a6ae4b4d2a139f17575a4223f16cdad627f23bf72899fb10a41f768d",
+    "release_id": "gate-r2",
+    "stored": "be35d878a6ae4b4d2a139f17575a4223f16cdad627f23bf72899fb10a41f768d"
+  },
+  "robots": 40,
+  "runs": 4,
+  "schema_ids": {
+    "1": 1,
+    "2": 3
+  },
+  "seed": 11,
+  "silver_rerun": {
+    "bronze_snapshot_id": 1658318627775239474,
+    "build_id": "8f076cd8557ca5779cbb6d90",
+    "status": "unchanged"
+  },
+  "spark_finished_at": "2026-11-14 22:26:04.076113+00:00",
+  "started_at": "2026-11-14 22:11:46.859719+00:00",
+  "steps": [
+    {
+      "peak_container_mib": 786,
+      "seconds": 11.4,
+      "step": "drop test catalog tables"
+    },
+    {
+      "peak_container_mib": 1361,
+      "seconds": 34.1,
+      "step": "bronze run 0"
+    },
+    {
+      "peak_container_mib": 1812,
+      "seconds": 53.5,
+      "step": "silver run 0"
+    },
+    {
+      "peak_container_mib": 1345,
+      "seconds": 30.7,
+      "step": "bronze run 1"
+    },
+    {
+      "peak_container_mib": 1950,
+      "seconds": 56.0,
+      "step": "silver killed before events"
+    },
+    {
+      "peak_container_mib": 2048,
+      "seconds": 73.4,
+      "step": "silver run 1"
+    },
+    {
+      "peak_container_mib": 1299,
+      "seconds": 29.6,
+      "step": "bronze run 2"
+    },
+    {
+      "peak_container_mib": 2048,
+      "seconds": 70.2,
+      "step": "silver run 2"
+    },
+    {
+      "peak_container_mib": 1399,
+      "seconds": 29.7,
+      "step": "release gate-r1"
+    },
+    {
+      "peak_container_mib": 1292,
+      "seconds": 28.1,
+      "step": "bronze run 3"
+    },
+    {
+      "peak_container_mib": 2047,
+      "seconds": 66.7,
+      "step": "silver run 3"
+    },
+    {
+      "peak_container_mib": 1329,
+      "seconds": 31.6,
+      "step": "bronze replay from earliest"
+    },
+    {
+      "peak_container_mib": 1125,
+      "seconds": 18.5,
+      "step": "silver rerun (no new data)"
+    },
+    {
+      "peak_container_mib": 1059,
+      "seconds": 15.5,
+      "step": "release gate-r1 again"
+    },
+    {
+      "peak_container_mib": 1417,
+      "seconds": 26.3,
+      "step": "reproduce gate-r1"
+    },
+    {
+      "peak_container_mib": 1441,
+      "seconds": 22.9,
+      "step": "digest incremental Silver"
+    },
+    {
+      "peak_container_mib": 1899,
+      "seconds": 57.6,
+      "step": "silver full rebuild"
+    },
+    {
+      "peak_container_mib": 1661,
+      "seconds": 32.4,
+      "step": "digest full Silver + Python reference"
+    },
+    {
+      "peak_container_mib": 1423,
+      "seconds": 29.6,
+      "step": "release gate-r2"
+    },
+    {
+      "peak_container_mib": 1885,
+      "seconds": 55.0,
+      "step": "maintenance (expire all untagged)"
+    },
+    {
+      "peak_container_mib": 1358,
+      "seconds": 26.6,
+      "step": "reproduce gate-r1 after expiry"
+    },
+    {
+      "peak_container_mib": 1383,
+      "seconds": 26.6,
+      "step": "reproduce gate-r2 after expiry"
+    },
+    {
+      "peak_container_mib": 1386,
+      "seconds": 28.1,
+      "step": "reconcile incl. independent Kafka count"
+    }
+  ],
+  "tampered": [
+    "2026-01-01",
+    "05d64d40-4a71-4809-8b32-593acd9747f4"
+  ],
+  "ticks": 1100,
+  "topics": {
+    "fleet.robot-events.v1": "gate.941598a4.robots",
+    "fleetforge.fleet.firmware_versions": "gate.941598a4.firmware",
+    "missions": "gate.941598a4.missions",
+    "telemetry": "gate.941598a4.telemetry",
+    "telemetry.raw.v1": "gate.941598a4.telemetry"
+  },
+  "trino_queries": [
+    {
+      "seconds": 0.12,
+      "sql": "SELECT * FROM gold.robot_daily_telemetry",
+      "stage": "first"
+    },
+    {
+      "seconds": 0.1,
+      "sql": "SELECT * FROM gold.pipeline_daily_quality",
+      "stage": "first"
+    },
+    {
+      "seconds": 0.09,
+      "sql": "SELECT * FROM gold.pipeline_daily_rates",
+      "stage": "first"
+    },
+    {
+      "seconds": 0.16,
+      "sql": "SELECT observed_date, robot_id FROM gold.robot_daily_telemetry WHERE is_final OR",
+      "stage": "first"
+    },
+    {
+      "seconds": 0.23,
+      "sql": "SELECT count(*) AS rows, count_if(is_final) AS final FROM gold.robot_daily_telem",
+      "stage": "first"
+    },
+    {
+      "seconds": 0.13,
+      "sql": "SELECT * FROM gold.robot_daily_telemetry",
+      "stage": "frozen"
+    },
+    {
+      "seconds": 0.13,
+      "sql": "SELECT * FROM gold.pipeline_daily_quality",
+      "stage": "frozen"
+    },
+    {
+      "seconds": 0.1,
+      "sql": "SELECT * FROM gold.pipeline_daily_rates",
+      "stage": "frozen"
+    },
+    {
+      "seconds": 0.13,
+      "sql": "SELECT * FROM gold.robot_daily_telemetry",
+      "stage": "reopened"
+    },
+    {
+      "seconds": 0.11,
+      "sql": "SELECT * FROM gold.pipeline_daily_quality",
+      "stage": "reopened"
+    },
+    {
+      "seconds": 0.11,
+      "sql": "SELECT * FROM gold.pipeline_daily_rates",
+      "stage": "reopened"
+    }
+  ]
+}

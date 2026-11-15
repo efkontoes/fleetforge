@@ -1,6 +1,6 @@
 name: platform
 
-# Platform checks, fast level: DAGs, dbt, ML code and alert rules, checked
+# Platform checks, fast level: DAGs, dbt, ML code, alert rules and Terraform, checked
 # without starting any data services. Runs on every pull request.
 on:
   pull_request:
@@ -58,3 +58,22 @@ jobs:
         run: |
           docker run --rm -v "$PWD/infrastructure/lakehouse/prometheus:/rules:ro" \
             --entrypoint promtool prom/prometheus:v3.5.0 test rules /rules/lakehouse-alerts.test.yml
+
+  terraform:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run: {working-directory: infrastructure/terraform}
+    env:
+      TF: docker run --rm -v ${{ github.workspace }}/infrastructure/terraform:/tf -w /tf -e AWS_ACCESS_KEY_ID=ci-placeholder -e AWS_SECRET_ACCESS_KEY=ci-placeholder hashicorp/terraform:1.16.7
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - run: $TF fmt -check -recursive
+      - run: $TF init -input=false -backend=false
+      - run: $TF validate
+      - name: Plan with placeholder credentials (offline_plan; nothing is created)
+        run: $TF plan -input=false -lock=false -refresh=false -var-file=ci.tfvars
+      - name: Static security checks (any finding fails the build)
+        run: |
+          docker run --rm -v "$PWD:/tf:ro" aquasec/trivy:0.76.0 config --exit-code 1 \
+            --severity LOW,MEDIUM,HIGH,CRITICAL --ignorefile /tf/.trivyignore /tf
