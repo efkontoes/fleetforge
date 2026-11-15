@@ -6,6 +6,8 @@ from a run that actually happened.
 
 ## Lakehouse (Milestones 3-6)
 
+L15-L20 come from Gate B, CI run 43664801824 (`evidence/ci-gate-b/gate-b.json`); reconciliation passed 11/11 after all of them.
+
 | # | Fault | Injected by | Expected | Result |
 |---|---|---|---|---|
 | L1 | Spark killed (SIGKILL) between two Silver commits | Gate A `kill-silver` | next build repairs it; Silver equals a full rebuild | passed: incremental equals full and the Python reference on 46,696 records |
@@ -22,12 +24,12 @@ from a run that actually happened.
 | L12 | Loss of the whole lakehouse (catalog and objects) | `scripts/lakehouse_dr.sh restore-check` | restore equals the backup; releases reproduce | passed: 15/15 tables, 24 s |
 | L13 | Fresh catalog never touched by Trino | Airflow maintenance DAG, first run | jobs work on a V0 JDBC catalog | failed first (D10), passed after the fix |
 | L14 | Lake with no Silver build yet | Airflow maintenance DAG | reconcile reports nothing to check | failed first (D11), passed after the fix |
-| L15 | Airflow scheduler killed during Silver | Gate B | run completes after restart; reconciliation passes | not run yet: Gate B stopped before its first fault (ledger) |
-| L16 | Spark job container killed during Silver | Gate B | task retried; reconciliation passes | not run yet: Gate B stopped before its first fault (ledger) |
-| L17 | Object store down at Bronze | Gate B | Bronze retried until Garage is back | not run yet: Gate B stopped before its first fault (ledger) |
-| L18 | Registry restarted during Bronze | Gate B | Bronze retried; no record misclassified | not run yet: Gate B stopped before its first fault (ledger) |
-| L19 | Completed run repeated | Gate B | every step idempotent | not run yet: Gate B stopped before its first fault (ledger) |
-| L20 | Backfill overlapping the pipeline | Gate B | writer pool serialises them; both succeed | not run yet: Gate B stopped before its first fault (ledger) |
+| L15 | Airflow scheduler killed during Silver | Gate B | run completes after restart; reconciliation passes | passed: Silver ran twice, the run succeeded |
+| L16 | Spark job container killed during Silver | Gate B | task retried; reconciliation passes | passed: Silver retried (2 attempts), the run succeeded |
+| L17 | Object store down at Bronze | Gate B | Bronze retried until Garage is back | passed: Bronze failed once while Garage was down, then succeeded |
+| L18 | Registry restarted during Bronze | Gate B | Bronze retried; no record misclassified | passed on the first attempt; with 17 new records the evidence does not show that Bronze called the registry during the restart, so this row is the weakest |
+| L19 | Completed run repeated | Gate B | every step idempotent | passed: a run with no new data succeeded |
+| L20 | Backfill overlapping the pipeline | Gate B | writer pool serialises them; both succeed | passed: both succeeded |
 
 ## Operational path (Milestone 2), rerun on the final code (2026-11-14)
 

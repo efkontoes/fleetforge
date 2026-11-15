@@ -144,10 +144,11 @@ fleetforge down
 
 Gate B (Airflow under six injected faults) needs about 5.5 GiB, so it runs on a CI runner:
 add the label `gate-b` (Gate B only) or `full-system` (all three gates) to a pull request,
-or dispatch the `full-system` workflow. It has not passed yet (see the execution ledger).
+or dispatch the `full-system` workflow. It passed in CI run 43664801824: six faults,
+every DAG run recovered, and reconciliation passed 11/11.
 
 ## Documentation
-* [Execution ledger](docs/reviews/platform-execution.md) (defects D1–D15, optimisations) ·
+* [Execution ledger](docs/reviews/platform-execution.md) (defects D1–D18, optimisations) ·
   [fault matrix](docs/reviews/fault-matrix.md) ·
   [lakehouse runbook](docs/operations/lakehouse-runbook.md) ·
   [security](docs/operations/security.md) ·
