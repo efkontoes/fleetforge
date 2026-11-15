@@ -53,6 +53,7 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]  # tests import the gate drivers in scripts/
 addopts = "-ra --strict-markers"
 # A hung test dumps every thread's stack after 5 min (CI run 43338045324 hung for
 # 40 min with no output). Stack steps in CI also pass --timeout to fail, not hang.
