@@ -131,8 +131,10 @@ def test_producer_survives_broker_interruption(fresh_topic, stack_settings, stac
 
     t = threading.Thread(target=interrupt)
     t.start()
+    # The client's own log, shown only on failure: this test once stalled for 300 s in CI.
+    debug = {"debug": "eos,broker,topic"}
     report = publish(items, bootstrap=BOOTSTRAP, registry_url=REGISTRY, topic=fresh_topic,
-                     registrar=HttpRegistrar(API), pace_eps=150,
+                     registrar=HttpRegistrar(API), pace_eps=150, producer_conf=debug,
                      on_delivery=lambda _i: ack_times.append(time.monotonic()))  # fmt: skip
     t.join()
 
