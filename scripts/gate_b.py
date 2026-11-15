@@ -100,9 +100,11 @@ def wait_task(dag: str, run_id: str, task: str, state: str = "running", minutes:
     raise TimeoutError(f"{task} never reached {state}")
 
 
-def job_container() -> str | None:
-    ids = sh("docker", "ps", "-q", "--filter", f"ancestor={SPARK_IMAGE}").split()
-    return ids[0] if ids else None
+def job_container(module: str) -> str | None:
+    """The running Spark container of one job, found by the module in its command."""
+    out = sh("docker", "ps", "--no-trunc", "--filter", f"ancestor={SPARK_IMAGE}",
+             "--format", "{{.ID}} {{.Command}}")  # fmt: skip
+    return next((line.split()[0] for line in out.splitlines() if f".jobs.{module}" in line), None)
 
 
 def psql(db: str, sql: str) -> list[list[str]]:
@@ -205,12 +207,17 @@ def kill_scheduler_during_silver(dag: str, run_id: str) -> str:
 
 
 def kill_spark_during_silver(dag: str, run_id: str) -> str:
-    wait_task(dag, run_id, "silver")
-    time.sleep(45)  # past session start, inside the build
-    container = job_container()
-    assert container, "no Spark job container"
+    """Kill Silver's own container while it runs; the gate fails unless Silver is retried."""
+    deadline = time.monotonic() + 20 * 60
+    while not (container := job_container("silver_build")):
+        assert time.monotonic() < deadline, "Silver's job container never started"
+        time.sleep(1)
+    time.sleep(10)  # past session start
     sh("docker", "kill", container)
-    return f"killed job container {container[:12]}"
+    state = wait(dag, run_id)
+    attempts = tries(dag, run_id)
+    assert state == "success" and attempts["silver"] >= 2, (state, attempts)
+    return f"killed Silver's job container {container[:12]}; Silver ran {attempts['silver']} times"
 
 
 def garage_down_before_bronze(dag: str, run_id: str) -> str:
