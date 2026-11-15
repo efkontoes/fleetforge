@@ -1,0 +1,138 @@
+# Milestone 3 lakehouse stack. A SEPARATE Compose project (own network, volumes and
+# container names) so it can never touch the Milestone 2 stack. On the 3.7 GiB
+# development machine it must NOT run at the same time as the Milestone 2 stack:
+# docs/architecture/milestone-3.md, "Deferred execution", gives the order of phases
+# and the memory budget of each.
+#
+#   sh scripts/make-lakehouse-env.sh                      # secrets -> .env.lakehouse
+#   make -f lakehouse.mk lake-up                          # Garage + catalog DB
+#   make -f lakehouse.mk lake-test                        # Spark tests (profile jobs)
+#   make -f lakehouse.mk lake-query                       # + Trino (profile query)
+#
+# Host ports (all 127.0.0.1, none used by Milestone 2): Garage S3 9900,
+# catalog PostgreSQL 5433, Trino 8090.
+name: fleetforge-lakehouse
+
+# AWS SDK v2 (in Iceberg's aws bundle and in Trino) adds a trailing checksum to every
+# upload by default (aws-chunked encoding). Garage rejects that as "Invalid payload
+# signature" (400): measured, see ADR 0015. Checksums only where S3 requires them.
+x-aws-sdk-checksums: &aws-sdk-checksums
+  AWS_REQUEST_CHECKSUM_CALCULATION: WHEN_REQUIRED
+  AWS_RESPONSE_CHECKSUM_VALIDATION: WHEN_REQUIRED
+
+x-lakehouse-env: &lakehouse-env
+  <<: *aws-sdk-checksums
+  FLEETFORGE_LAKEHOUSE_CATALOG_JDBC_URL: jdbc:postgresql://catalog-db:5432/iceberg_catalog
+  FLEETFORGE_LAKEHOUSE_CATALOG_USER: iceberg
+  FLEETFORGE_LAKEHOUSE_CATALOG_PASSWORD: ${LAKEHOUSE_CATALOG_PASSWORD:?run scripts/make-lakehouse-env.sh}
+  FLEETFORGE_LAKEHOUSE_S3_ENDPOINT: http://garage:3900
+  FLEETFORGE_LAKEHOUSE_S3_ACCESS_KEY: ${LAKEHOUSE_S3_ACCESS_KEY:?}
+  FLEETFORGE_LAKEHOUSE_S3_SECRET_KEY: ${LAKEHOUSE_S3_SECRET_KEY:?}
+  FLEETFORGE_LAKEHOUSE_DRIVER_MEMORY: 768m
+  FLEETFORGE_LAKEHOUSE_SPARK_MASTER: "local[1]"
+
+services:
+  garage:
+    # S3-compatible object store (ADR 0015): prebuilt, digest-pinned, ~45 MiB peak.
+    image: dxflrs/garage:v2.5.0@sha256:677e5b758e4425a325b811c425c026bf35a4bf42f7ddbaa773de3f4fd779a5a5
+    environment:
+      GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET:?run scripts/make-lakehouse-env.sh}
+      GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN:?run scripts/make-lakehouse-env.sh}
+    volumes:
+      - ./garage/garage.toml:/etc/garage.toml:ro
+      - garage-meta:/var/lib/garage/meta
+      - garage-data:/var/lib/garage/data
+    ports: ["127.0.0.1:9900:3900"]
+    mem_limit: 192m
+
+  garage-init:
+    # The Garage image has no shell; its admin API is configured from Python.
+    image: python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
+    depends_on: [garage]
+    environment:
+      GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN:?}
+      LAKEHOUSE_S3_ACCESS_KEY: ${LAKEHOUSE_S3_ACCESS_KEY:?}
+      LAKEHOUSE_S3_SECRET_KEY: ${LAKEHOUSE_S3_SECRET_KEY:?}
+    volumes: ["./garage/garage_init.py:/garage_init.py:ro"]
+    command: ["python", "/garage_init.py"]
+    restart: "no"
+
+  catalog-db:
+    # Iceberg JDBC catalog: one row per table, holding its current metadata.json
+    # location. A commit is a conditional UPDATE of that row (optimistic concurrency).
+    image: postgres:17@sha256:ff87138949ad9a46f32ff23bd6852b52ce024a13dffe9b4087be98292cdd3b4f
+    environment:
+      POSTGRES_USER: iceberg
+      POSTGRES_PASSWORD: ${LAKEHOUSE_CATALOG_PASSWORD:?}
+      POSTGRES_DB: iceberg_catalog
+    command: ["postgres", "-c", "shared_buffers=32MB", "-c", "max_connections=40"]
+    volumes:
+      - catalog-data:/var/lib/postgresql/data
+      - ./catalog-db/init.sql:/docker-entrypoint-initdb.d/10-test-catalog.sql:ro
+    ports: ["127.0.0.1:5433:5432"]
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U iceberg -d iceberg_catalog"]
+      interval: 3s
+      retries: 30
+
+  spark:
+    # Jobs and lakehouse tests: Spark local mode in one JVM (driver = executor).
+    build: {context: ../.., dockerfile: infrastructure/lakehouse/spark/Dockerfile}
+    image: fleetforge-lakehouse-spark:dev
+    profiles: ["jobs"]
+    depends_on:
+      catalog-db: {condition: service_healthy}
+      garage-init: {condition: service_completed_successfully}
+    environment:
+      <<: *lakehouse-env
+      FLEETFORGE_LAKEHOUSE: "1"
+      PYTHONPATH: /workspace/src
+      # glibc otherwise creates up to 8 malloc arenas per core; native allocations
+      # (compression, Arrow) then fragment outside every JVM limit (OOM kill, spec B5).
+      MALLOC_ARENA_MAX: "2"
+    volumes: ["../..:/workspace:ro", "../../build/lakehouse-evidence:/evidence"]
+    # Not /workspace: Milestone 2's settings read ./.env, which holds its secrets
+    # (mode 600) and must stay unreadable to this container (found in CI).
+    working_dir: /home/fleetforge
+    # Budget (measured): JVM heap 768 MB + capped off-heap, Python workers ~0.6 GiB,
+    # pytest driver ~0.4 GiB. Never runs beside Trino.
+    mem_limit: 2048m
+    entrypoint: ["python"]
+
+  trino:
+    image: trinodb/trino:484@sha256:2704eb53935af5e582d63d6033e9bf99d20c325e9b0e30b1016ef59a4773979f
+    profiles: ["query"]
+    depends_on:
+      catalog-db: {condition: service_healthy}
+      garage-init: {condition: service_completed_successfully}
+    environment:
+      <<: *aws-sdk-checksums
+      LAKEHOUSE_CATALOG_PASSWORD: ${LAKEHOUSE_CATALOG_PASSWORD:?}
+      LAKEHOUSE_S3_ACCESS_KEY: ${LAKEHOUSE_S3_ACCESS_KEY:?}
+      LAKEHOUSE_S3_SECRET_KEY: ${LAKEHOUSE_S3_SECRET_KEY:?}
+    # Replaces the image's sample catalogs; the image's own jvm.config (heap as a
+    # percentage of the container limit) is kept, so the limit sizes the heap.
+    volumes: ["./trino/catalog:/etc/trino/catalog:ro"]
+    ports: ["127.0.0.1:8090:8080"]
+    mem_limit: 1400m
+
+  dbt:
+    # Gold models and data tests (dbt/), run against Trino; reads the project from the
+    # image, or from the mounted working tree when DBT_PROJECT_DIR=/workspace/dbt.
+    build: {context: ../.., dockerfile: infrastructure/lakehouse/dbt/Dockerfile}
+    image: fleetforge-lakehouse-dbt:dev
+    profiles: ["query"]
+    depends_on:
+      trino: {condition: service_healthy}
+    environment:
+      DBT_TARGET: ${DBT_TARGET:-lake}
+      DBT_PROJECT_DIR: ${DBT_PROJECT_DIR:-/dbt}
+      DBT_PROFILES_DIR: ${DBT_PROJECT_DIR:-/dbt}
+    volumes: ["../..:/workspace:ro"]
+    mem_limit: 400m
+
+volumes:
+  garage-meta:
+  garage-data:
+  catalog-data:

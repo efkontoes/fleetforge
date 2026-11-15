@@ -1,0 +1,36 @@
+# promtool test rules lakehouse-alerts.test.yml
+rule_files: [lakehouse-alerts.yml]
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'fleetforge_lake_job_last_success_timestamp_seconds{job="silver_build"}'
+        values: "0x40"
+      - series: 'fleetforge_lake_job_last_exit_code{job="bronze_ingest"}'
+        values: "0 0 65"
+      - series: 'fleetforge_lake_freshness_within_target_ratio'
+        values: "0.99x10 0.90x40"
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: LakehouseSilverStale
+        exp_alerts:
+          - exp_labels: {severity: critical, job: silver_build}
+            exp_annotations:
+              summary: No successful Silver build for 30 minutes; the freshness SLO is at risk.
+              runbook: docs/operations/lakehouse-runbook.md#silver-stale
+      - eval_time: 2m
+        alertname: LakehouseJobNeedsOperator
+        exp_alerts:
+          - exp_labels: {severity: critical, job: bronze_ingest}
+            exp_annotations:
+              summary: bronze_ingest failed in a way a retry cannot fix.
+              runbook: docs/operations/lakehouse-runbook.md#permanent-failure
+      - eval_time: 30m
+        alertname: LakehouseFreshnessSLOBreached
+      - eval_time: 45m
+        alertname: LakehouseFreshnessSLOBreached
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: Only 90% of records reached Silver within 15 minutes.
+              runbook: docs/operations/lakehouse-runbook.md#freshness

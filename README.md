@@ -8,8 +8,8 @@ ML datasets.
 | Milestone | Scope | Status |
 |---|---|---|
 | 1 | HTTP → PostgreSQL: ordering, idempotency, transactional outbox | done |
-| 2 | Kafka ingestion, batched projector, Debezium CDC, quarantine/replay, observability, roles | **this branch** |
-| 3 | Bronze/silver lakehouse | next |
+| 2 | Kafka ingestion, batched projector, Debezium CDC, quarantine/replay, observability, roles | done |
+| 3 | Lakehouse: Kafka → Bronze → incremental Silver (Iceberg on Garage S3) → dbt Gold on Trino, dataset releases, maintenance, reconciliation | done |
 
 ## Architecture (Milestone 2)
 
@@ -95,7 +95,38 @@ benchmarks/            harnesses, raw results, reports
 docs/                  architecture, ADRs 0001-0011, learning notes, runbook, reviews
 ```
 
+## Lakehouse (Milestone 3)
+
+A separate Compose project (`infrastructure/lakehouse/`) that never runs beside the
+Milestone 2 stack on a small machine. Spark 4.1.4 writes Iceberg 1.12.0 tables to
+Garage (S3) through a JDBC catalog in its own PostgreSQL; Trino 484 reads them.
+
+```bash
+make -f lakehouse.mk lake-unit                       # pure lakehouse unit tests, no Java
+sh scripts/make-lakehouse-env.sh                     # secrets -> .env.lakehouse
+make -f lakehouse.mk lake-build                      # Spark image
+make -f lakehouse.mk lake-test                       # S3 conformance + Spark/Iceberg tests
+make -f lakehouse.mk lake-test-trino                 # dbt Gold twice, then Trino checks
+make -f lakehouse.mk lake-gate-a                     # end to end on real Kafka (M2 kafka + registry up)
+make -f lakehouse.mk lake-down
+```
+
+Gate A (46,696 telemetry records from real Kafka): incremental Silver equals a full
+rebuild and an independent Python reference after a SIGKILL at a commit boundary;
+replay adds nothing; releases reproduce after expiry; Kafka, Bronze, Silver and Gold
+reconcile. Evidence: [execution ledger](docs/reviews/platform-execution.md).
+
 ## Documentation
+* [Milestone 3 specification](docs/architecture/milestone-3.md) (contracts, gaps, layers, failure rules, test evidence) ·
+  [table schemas](docs/architecture/milestone-3-tables.md) ·
+  [learning guide](docs/learning/milestone-3.md) ·
+  ADRs [0012](docs/adr/0012-lakehouse-storage-and-catalog.md) catalog ·
+  [0013](docs/adr/0013-bronze-idempotent-ingestion.md) Bronze idempotence ·
+  [0014](docs/adr/0014-silver-deterministic-rebuild-and-outcome-lineage.md) deterministic Silver ·
+  [0015](docs/adr/0015-object-storage-garage.md) Garage ·
+  [0017](docs/adr/0017-incremental-silver.md) incremental Silver ·
+  [0018](docs/adr/0018-gold-dbt-and-spark-releases.md) Gold and releases ·
+  [lakehouse runbook](docs/operations/lakehouse-runbook.md)
 * [Milestone 2 architecture](docs/architecture/milestone-2.md) · [Milestone 1 architecture](docs/architecture/milestone-1.md)
 * [Learning notes: Kafka, idempotency, WAL, CDC, outbox, backpressure, schema evolution, replay](docs/learning/milestone-2.md)
 * [Milestone 2 benchmark report](benchmarks/milestone-2-report.md) · [Milestone 1 benchmarks](benchmarks/README.md)

@@ -38,7 +38,8 @@ def subject_for(topic: str) -> str:
 
 
 def registry_client(url: str | None = None) -> SchemaRegistryClient:
-    return SchemaRegistryClient({"url": url or get_settings().schema_registry_url})
+    # The client has no timeout by default; a silent registry must not block a caller forever.
+    return SchemaRegistryClient({"url": url or get_settings().schema_registry_url, "timeout": 10})
 
 
 def ensure_compatibility(client: SchemaRegistryClient, subject: str) -> None:

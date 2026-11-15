@@ -1,0 +1,48 @@
+# Lakehouse alerts. Each one names its runbook section in docs/operations/lakehouse-runbook.md.
+groups:
+  - name: lakehouse
+    rules:
+      - alert: LakehouseSilverStale
+        expr: time() - fleetforge_lake_job_last_success_timestamp_seconds{job="silver_build"} > 1800
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: No successful Silver build for 30 minutes; the freshness SLO is at risk.
+          runbook: docs/operations/lakehouse-runbook.md#silver-stale
+
+      - alert: LakehouseJobNeedsOperator
+        expr: fleetforge_lake_job_last_exit_code == 65
+        labels: {severity: critical}
+        annotations:
+          summary: "{{ $labels.job }} failed in a way a retry cannot fix."
+          runbook: docs/operations/lakehouse-runbook.md#permanent-failure
+
+      - alert: LakehouseJobRetrying
+        expr: fleetforge_lake_job_failures_last_hour > 2
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.job }} failed {{ $value }} times in the last hour."
+          runbook: docs/operations/lakehouse-runbook.md#retrying
+
+      - alert: LakehouseReconciliationFailed
+        expr: fleetforge_lake_reconciliation_failed_checks > 0
+        labels: {severity: critical}
+        annotations:
+          summary: "{{ $value }} reconciliation checks failed; counts across layers disagree."
+          runbook: docs/operations/lakehouse-runbook.md#reconciliation
+
+      - alert: LakehouseFreshnessSLOBreached
+        expr: fleetforge_lake_freshness_within_target_ratio < 0.95
+        for: 30m
+        labels: {severity: warning}
+        annotations:
+          summary: "Only {{ $value | humanizePercentage }} of records reached Silver within 15 minutes."
+          runbook: docs/operations/lakehouse-runbook.md#freshness
+
+      - alert: LakehouseOpsUnreadable
+        expr: fleetforge_lake_ops_up == 0
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: The exporter cannot read lakehouse_ops; every other lakehouse alert is blind.
+          runbook: docs/operations/lakehouse-runbook.md#exporter

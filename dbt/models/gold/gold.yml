@@ -1,0 +1,168 @@
+version: 2
+
+# Columns and types must equal src/fleetforge/lakehouse/tables.py (a unit test checks it).
+models:
+  - name: robot_daily_telemetry
+    description: >-
+      Fleet telemetry analytics: one row per robot and observed day, current events only.
+    data_tests:
+      - unique_combination: {arguments: {columns: [observed_date, robot_id]}}
+      - holds: {arguments: {expression: "observed_positions <= events and expected_events >= observed_positions"}}
+      - holds: {arguments: {expression: "battery_pct_min <= battery_pct_avg + 1e-9 and battery_pct_avg <= battery_pct_max + 1e-9"}}
+      - holds: {arguments: {expression: "first_observed_at <= last_observed_at"}}
+    columns:
+      - name: observed_date
+        data_type: date
+        constraints: [{type: not_null}]
+      - name: robot_id
+        data_type: varchar
+        constraints: [{type: not_null}]
+        data_tests:
+          - relationships: {arguments: {to: "source('silver', 'robot_registry')", field: robot_id}}
+      - name: robot_model
+        data_type: varchar
+        constraints: [{type: not_null}]
+      - name: events
+        data_type: bigint
+        constraints: [{type: not_null}]
+      - name: boots
+        data_type: bigint
+        constraints: [{type: not_null}]
+      - name: observed_positions
+        data_type: bigint
+        constraints: [{type: not_null}]
+      - name: expected_events
+        data_type: bigint
+        constraints: [{type: not_null}]
+      - name: missing_sequences
+        data_type: bigint
+        constraints: [{type: not_null}]
+        data_tests:
+          - between: {arguments: {min_value: 0, max_value: 1e12}}
+      - name: out_of_order_events
+        data_type: bigint
+        constraints: [{type: not_null}]
+      - name: duplicate_deliveries
+        data_type: bigint
+        constraints: [{type: not_null}]
+      - name: corrected_events
+        data_type: bigint
+        constraints: [{type: not_null}]
+      - name: battery_pct_min
+        data_type: double
+        constraints: [{type: not_null}]
+        data_tests:
+          - between: {arguments: {min_value: 0, max_value: 100}}
+      - name: battery_pct_avg
+        data_type: double
+        constraints: [{type: not_null}]
+      - name: battery_pct_max
+        data_type: double
+        constraints: [{type: not_null}]
+        data_tests:
+          - between: {arguments: {min_value: 0, max_value: 100}}
+      - name: distance_m
+        data_type: double
+        constraints: [{type: not_null}]
+        data_tests:
+          - between: {arguments: {min_value: 0, max_value: 1e9}}
+      - name: motor_temp_c_max
+        data_type: double
+      - name: lidar_fault_events
+        data_type: bigint
+        constraints: [{type: not_null}]
+      - name: first_observed_at
+        data_type: timestamp(6) with time zone
+        constraints: [{type: not_null}]
+      - name: last_observed_at
+        data_type: timestamp(6) with time zone
+        constraints: [{type: not_null}]
+      - name: is_final
+        data_type: boolean
+        constraints: [{type: not_null}]
+      - name: silver_build_id
+        data_type: varchar
+        constraints: [{type: not_null}]
+  - name: pipeline_daily_quality
+    description: >-
+      Operational data quality: Silver outcomes per ingestion day, topic, outcome and reason.
+    data_tests:
+      - unique_combination: {arguments: {columns: [ingest_date, source_topic, outcome, reason_code]}}
+      - holds: {arguments: {expression: "(outcome in ('ACCEPTED', 'DUPLICATE')) = (reason_code = 'NONE')"}}
+      - holds: {arguments: {expression: "retry_eligible = false or outcome in ('REJECTED', 'UNRESOLVED')"}}
+    columns:
+      - name: ingest_date
+        data_type: date
+        constraints: [{type: not_null}]
+      - name: source_topic
+        data_type: varchar
+        constraints: [{type: not_null}]
+      - name: outcome
+        data_type: varchar
+        constraints: [{type: not_null}]
+        data_tests:
+          - accepted_values: {arguments: {values: [ACCEPTED, DUPLICATE, REJECTED, UNRESOLVED]}}
+      - name: reason_code
+        data_type: varchar
+        constraints: [{type: not_null}]
+      - name: retry_eligible
+        data_type: boolean
+        constraints: [{type: not_null}]
+      - name: records
+        data_type: bigint
+        constraints: [{type: not_null}]
+        data_tests:
+          - between: {arguments: {min_value: 1, max_value: 1e15}}
+      - name: distinct_events
+        data_type: bigint
+        constraints: [{type: not_null}]
+      - name: distinct_robots
+        data_type: bigint
+        constraints: [{type: not_null}]
+      - name: silver_build_id
+        data_type: varchar
+        constraints: [{type: not_null}]
+  - name: pipeline_daily_rates
+    description: >-
+      Daily quality rates with explicit denominators. UNRESOLVED records are counted but excluded from the denominator, since they have not been classified yet.
+    data_tests:
+      - unique_combination: {arguments: {columns: [ingest_date, source_topic]}}
+      - holds: {arguments: {expression: "bronze_records = classified + unresolved"}}
+      - holds: {arguments: {expression: "classified = accepted + duplicates + rejected"}}
+      - holds: {arguments: {expression: "(classified = 0) = (invalid_rate is null)"}}
+    columns:
+      - name: ingest_date
+        data_type: date
+        constraints: [{type: not_null}]
+      - name: source_topic
+        data_type: varchar
+        constraints: [{type: not_null}]
+      - name: bronze_records
+        data_type: bigint
+        constraints: [{type: not_null}]
+      - name: classified
+        data_type: bigint
+        constraints: [{type: not_null}]
+      - name: accepted
+        data_type: bigint
+        constraints: [{type: not_null}]
+      - name: duplicates
+        data_type: bigint
+        constraints: [{type: not_null}]
+      - name: rejected
+        data_type: bigint
+        constraints: [{type: not_null}]
+      - name: unresolved
+        data_type: bigint
+        constraints: [{type: not_null}]
+      - name: invalid_rate
+        data_type: double
+        data_tests:
+          - between: {arguments: {min_value: 0, max_value: 1}}
+      - name: duplicate_rate
+        data_type: double
+        data_tests:
+          - between: {arguments: {min_value: 0, max_value: 1}}
+      - name: silver_build_id
+        data_type: varchar
+        constraints: [{type: not_null}]
