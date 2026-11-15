@@ -113,12 +113,15 @@ def test_records_deleted_before_being_applied_are_refused(fresh_topic, stack_set
     fleet(fresh_topic, seed + 4, robots=6, ticks=60)
     Projector(stack_settings, stack_db, topic=fresh_topic, group=group).run(max_idle_s=5)
     applied = ledger(stack_db, group)
-    fleet(fresh_topic, seed + 5, robots=6, ticks=60)
-    hw = high_watermarks(fresh_topic)
-    # Only a partition with ledger history can show a gap (one without history may
-    # legitimately start wherever the log begins); pick the one with most new records.
-    candidates = [p for p in applied if hw[p] - applied[p][0] >= 3]
-    assert candidates, "second fleet wrote too little to an already-applied partition"
+    # Only a partition with ledger history can show a gap, and a fleet's robots can all
+    # hash elsewhere, so publish fleets until one lands on an applied partition.
+    for extra in range(5, 10):
+        fleet(fresh_topic, seed + extra, robots=6, ticks=60)
+        hw = high_watermarks(fresh_topic)
+        candidates = [p for p in applied if hw[p] - applied[p][0] >= 3]
+        if candidates:
+            break
+    assert candidates, "no later fleet wrote to an already-applied partition"
     part = max(candidates, key=lambda p: hw[p] - applied[p][0])
     cut = applied[part][0] + 3  # retention removes 3 records we never applied
     admin = admin_with_leaders(fresh_topic, [part])
